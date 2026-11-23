@@ -1,12 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Printer, Receipt } from 'lucide-react';
+import { CheckCircle2, Printer, Receipt, ShieldCheck } from 'lucide-react';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  setDoc,
+  updateDoc,
+} from 'firebase/firestore';
 import { AdminShell } from './AdminShell';
 import { DataTable } from '../../components/dashboard/DataTable';
 import { SeatMap } from '../../components/seats/SeatMap';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../components/Toast';
+import { db } from '../../lib/firebase';
 import {
   adminCreateSettlement,
   adminFetchAllBookings,
@@ -428,6 +437,303 @@ export function AdminFinancialsPage() {
                 ) : (
                   <span className="font-mono text-emerald-600 font-semibold">PAID ({r.referenceNo})</span>
                 ),
+            },
+          ]}
+        />
+      </div>
+    </AdminShell>
+  );
+}
+
+export interface ManagedUser {
+  id: string;
+  uid?: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: 'passenger' | 'owner' | 'admin';
+  status: 'active' | 'suspended';
+  createdAt?: string;
+}
+
+export function AdminUserControlPage() {
+  const { profile } = useAuth();
+  const { notify } = useToast();
+  const queryClient = useQueryClient();
+
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [role, setRole] = useState<'passenger' | 'owner' | 'admin'>('admin');
+  const [saving, setSaving] = useState(false);
+
+  const { data: users = [], isLoading } = useQuery<ManagedUser[]>({
+    queryKey: ['admin-users'],
+    queryFn: async () => {
+      const snap = await getDocs(collection(db, 'users'));
+      return snap.docs.map((d) => {
+        const raw = d.data() as Record<string, unknown>;
+        const normalizedRole =
+          raw.role === 'admin' || raw.role === 'owner' || raw.role === 'passenger'
+            ? raw.role
+            : 'passenger';
+        const normalizedStatus = raw.status === 'suspended' ? 'suspended' : 'active';
+        return {
+          id: d.id,
+          uid: typeof raw.uid === 'string' && raw.uid ? raw.uid : d.id,
+          name: typeof raw.name === 'string' ? raw.name : '',
+          email: typeof raw.email === 'string' ? raw.email : '',
+          phone: typeof raw.phone === 'string' ? raw.phone : '',
+          role: normalizedRole,
+          status: normalizedStatus,
+          createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
+        };
+      });
+    },
+  });
+
+  const refreshUsers = () => {
+    queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+  };
+
+  const handleAddOrAssignUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setSaving(true);
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanName = name.trim() || cleanEmail.split('@')[0];
+      const cleanPhone = phone.trim();
+      const now = new Date().toISOString();
+
+      const existing = users.find((u) => (u.email || '').toLowerCase() === cleanEmail);
+      const targetDocId = existing ? existing.id : encodeURIComponent(cleanEmail);
+
+      await setDoc(
+        doc(db, 'users', targetDocId),
+        {
+          uid: existing?.uid || targetDocId,
+          name: cleanName,
+          email: cleanEmail,
+          phone: cleanPhone,
+          role,
+          status: existing?.status || 'active',
+          updatedAt: now,
+          createdAt: existing?.createdAt || now,
+        },
+        { merge: true }
+      );
+
+      setName('');
+      setEmail('');
+      setPhone('');
+      setRole('admin');
+      notify(`${cleanEmail} (${role}) saved`, 'success');
+      refreshUsers();
+    } catch (err) {
+      notify(
+        'Failed to save user',
+        'error',
+        err instanceof Error ? err.message : 'Check Firestore rules or permissions'
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleChangeRole = async (user: ManagedUser, nextRole: 'passenger' | 'owner' | 'admin') => {
+    const isSelf = Boolean(profile?.uid && (user.uid === profile.uid || user.id === profile.uid));
+    if (isSelf && nextRole !== 'admin') {
+      notify('You cannot remove your own admin role', 'error');
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'users', user.id), {
+        role: nextRole,
+        updatedAt: new Date().toISOString(),
+      });
+      notify(`Role updated to ${nextRole}`, 'success');
+      refreshUsers();
+    } catch (err) {
+      notify('Failed to update role', 'error', err instanceof Error ? err.message : 'Permission denied');
+    }
+  };
+
+  const handleToggleStatus = async (user: ManagedUser) => {
+    const isSelf = Boolean(profile?.uid && (user.uid === profile.uid || user.id === profile.uid));
+    const nextStatus = user.status === 'suspended' ? 'active' : 'suspended';
+    if (isSelf && nextStatus === 'suspended') {
+      notify('You cannot suspend your own active admin account', 'error');
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, 'users', user.id), {
+        status: nextStatus,
+        updatedAt: new Date().toISOString(),
+      });
+      notify(`User ${nextStatus}`, 'success');
+      refreshUsers();
+    } catch (err) {
+      notify('Failed to update status', 'error', err instanceof Error ? err.message : 'Permission denied');
+    }
+  };
+
+  const handleRemoveUser = async (user: ManagedUser) => {
+    const isSelf = Boolean(profile?.uid && (user.uid === profile.uid || user.id === profile.uid));
+    if (isSelf) {
+      notify('You cannot remove your own active admin account', 'error');
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'users', user.id));
+      notify(`Removed ${user.email || user.name || user.id}`, 'success');
+      refreshUsers();
+    } catch (err) {
+      notify('Failed to remove user', 'error', err instanceof Error ? err.message : 'Permission denied');
+    }
+  };
+
+  return (
+    <AdminShell>
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-extrabold text-slate-950 dark:text-white font-display flex items-center gap-2">
+            <ShieldCheck className="w-6 h-6 text-orange-600" />
+            Admin & User Control Center
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            Add or remove admins, assign Passenger / Bus Owner / Admin roles, suspend accounts, or remove user records.
+          </p>
+        </div>
+
+        <form
+          onSubmit={handleAddOrAssignUser}
+          className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4"
+        >
+          <h2 className="text-sm font-bold font-display">Add Admin / Assign User Role</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <input
+              type="text"
+              placeholder="Full Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="h-10 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-sm"
+            />
+            <input
+              type="email"
+              required
+              placeholder="User or Admin Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="h-10 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-sm"
+            />
+            <input
+              type="text"
+              placeholder="Phone (+880...)"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              className="h-10 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-sm font-mono"
+            />
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as 'passenger' | 'owner' | 'admin')}
+              className="h-10 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+            >
+              <option value="admin">Admin</option>
+              <option value="owner">Bus Owner</option>
+              <option value="passenger">Passenger</option>
+            </select>
+            <button
+              type="submit"
+              disabled={saving}
+              className="h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 text-white text-xs font-semibold cursor-pointer"
+            >
+              {saving ? 'Saving...' : 'Add / Update User'}
+            </button>
+          </div>
+        </form>
+
+        <DataTable<ManagedUser>
+          title="All Users & Admin Access Control"
+          data={users}
+          loading={isLoading}
+          searchPlaceholder="Search name, email, phone, role..."
+          searchPredicate={(r, q) =>
+            (r.name || '').toLowerCase().includes(q) ||
+            (r.email || '').toLowerCase().includes(q) ||
+            (r.phone || '').toLowerCase().includes(q) ||
+            (r.role || '').toLowerCase().includes(q)
+          }
+          filterOptions={[
+            { label: 'Admins', value: 'admin' },
+            { label: 'Bus Owners', value: 'owner' },
+            { label: 'Passengers', value: 'passenger' },
+            { label: 'Suspended', value: 'suspended' },
+          ]}
+          filterPredicate={(r, val) =>
+            val === 'suspended' ? r.status === 'suspended' : r.role === val
+          }
+          columns={[
+            {
+              key: 'user',
+              header: 'User',
+              render: (r) => (
+                <div>
+                  <div className="font-semibold">{r.name || 'Unnamed User'}</div>
+                  <div className="text-xs text-slate-500">{r.email || r.id}</div>
+                </div>
+              ),
+            },
+            {
+              key: 'phone',
+              header: 'Phone',
+              render: (r) => <span className="font-mono text-xs">{r.phone || '—'}</span>,
+            },
+            {
+              key: 'role',
+              header: 'Role',
+              render: (r) => (
+                <select
+                  value={r.role}
+                  onChange={(e) => handleChangeRole(r, e.target.value as 'passenger' | 'owner' | 'admin')}
+                  className="h-8 px-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold capitalize"
+                >
+                  <option value="passenger">Passenger</option>
+                  <option value="owner">Bus Owner</option>
+                  <option value="admin">Admin</option>
+                </select>
+              ),
+            },
+            {
+              key: 'status',
+              header: 'Status',
+              render: (r) => <span className="uppercase font-mono text-[11px]">{r.status}</span>,
+            },
+            {
+              key: 'actions',
+              header: 'Controls',
+              align: 'right',
+              render: (r) => (
+                <div className="inline-flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleStatus(r)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs cursor-pointer"
+                  >
+                    {r.status === 'suspended' ? 'Activate' : 'Suspend'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveUser(r)}
+                    className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs cursor-pointer"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ),
             },
           ]}
         />
