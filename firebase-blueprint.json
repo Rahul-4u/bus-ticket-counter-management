@@ -1,0 +1,218 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated platform user with RBAC role and profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "role": { "type": "string", "enum": ["admin", "owner", "passenger", "counter_staff"] },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "displayName", "role", "status"]
+    },
+    "BusOwner": {
+      "title": "BusOwner",
+      "description": "Fleet manager / bus owner entity operating under DeshLine",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "companyUnitName": { "type": "string", "maxLength": 120 },
+        "contactName": { "type": "string", "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 200 },
+        "commissionRate": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["id", "userId", "companyUnitName", "contactName", "phone", "status"]
+    },
+    "City": {
+      "title": "City",
+      "description": "Bangladesh city served by DeshLine routes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 80 },
+        "code": { "type": "string", "maxLength": 10 },
+        "division": { "type": "string", "maxLength": 60 },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "name", "code", "division", "isActive"]
+    },
+    "Route": {
+      "title": "Route",
+      "description": "Intercity route with origin, destination, distance, and stops",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "originCityId": { "type": "string", "maxLength": 128 },
+        "originName": { "type": "string", "maxLength": 80 },
+        "destinationCityId": { "type": "string", "maxLength": 128 },
+        "destinationName": { "type": "string", "maxLength": 80 },
+        "distanceKm": { "type": "number" },
+        "estimatedDuration": { "type": "string", "maxLength": 40 },
+        "baseFare": { "type": "number" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "originCityId", "originName", "destinationCityId", "destinationName", "baseFare", "isActive"]
+    },
+    "Bus": {
+      "title": "Bus",
+      "description": "Fleet bus belonging to a bus owner with seat layout configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "ownerName": { "type": "string", "maxLength": 120 },
+        "coachNumber": { "type": "string", "maxLength": 40 },
+        "registrationNumber": { "type": "string", "maxLength": 40 },
+        "name": { "type": "string", "maxLength": 120 },
+        "busTypeName": { "type": "string", "maxLength": 80 },
+        "layoutType": { "type": "string", "enum": ["2+2", "2+1", "sleeper", "custom"] },
+        "isAc": { "type": "boolean" },
+        "totalSeats": { "type": "number" },
+        "approvalStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "ownerId", "coachNumber", "name", "layoutType", "isAc", "totalSeats", "approvalStatus"]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Scheduled bus departure on a route for a specific journey date",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "busId": { "type": "string", "maxLength": 128 },
+        "routeId": { "type": "string", "maxLength": 128 },
+        "originName": { "type": "string", "maxLength": 80 },
+        "destinationName": { "type": "string", "maxLength": 80 },
+        "journeyDate": { "type": "string", "maxLength": 20 },
+        "departureTime": { "type": "string", "maxLength": 20 },
+        "arrivalTime": { "type": "string", "maxLength": 20 },
+        "fare": { "type": "number" },
+        "totalSeats": { "type": "number" },
+        "availableSeats": { "type": "number" },
+        "status": { "type": "string", "enum": ["scheduled", "boarding", "completed", "cancelled"] }
+      },
+      "required": ["id", "ownerId", "busId", "routeId", "journeyDate", "departureTime", "fare", "totalSeats", "availableSeats", "status"]
+    },
+    "TripSeat": {
+      "title": "TripSeat",
+      "description": "Individual seat state for a trip (PII-free inventory)",
+      "type": "object",
+      "properties": {
+        "seatNumber": { "type": "string", "maxLength": 16 },
+        "row": { "type": "number" },
+        "col": { "type": "number" },
+        "deck": { "type": "string", "enum": ["lower", "upper"] },
+        "status": { "type": "string", "enum": ["available", "locked", "booked", "blocked"] },
+        "lockedByUid": { "type": "string", "maxLength": 128 },
+        "lockExpiresAt": { "type": "number" },
+        "bookingId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["seatNumber", "row", "col", "deck", "status"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Ticket booking record with independent booking and payment statuses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "pnr": { "type": "string", "maxLength": 24 },
+        "tripId": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "bookingChannel": { "type": "string", "enum": ["online", "counter"] },
+        "passengerName": { "type": "string", "maxLength": 120 },
+        "passengerPhone": { "type": "string", "maxLength": 32 },
+        "passengerEmail": { "type": "string", "maxLength": 200 },
+        "totalFare": { "type": "number" },
+        "bookingStatus": { "type": "string", "enum": ["pending", "awaiting_payment", "confirmed", "cancelled", "expired", "refunded"] },
+        "paymentStatus": { "type": "string", "enum": ["pending", "processing", "paid", "failed", "refunded", "partially_refunded"] },
+        "paymentMethod": { "type": "string", "enum": ["sslcommerz", "aamarpay", "counter_cash"] }
+      },
+      "required": ["id", "pnr", "tripId", "ownerId", "userId", "bookingChannel", "passengerName", "passengerPhone", "totalFare", "bookingStatus", "paymentStatus"]
+    },
+    "TicketVerification": {
+      "title": "TicketVerification",
+      "description": "PII-isolated public QR/PNR verification record",
+      "type": "object",
+      "properties": {
+        "pnr": { "type": "string", "maxLength": 24 },
+        "bookingId": { "type": "string", "maxLength": 128 },
+        "routeLabel": { "type": "string", "maxLength": 160 },
+        "busName": { "type": "string", "maxLength": 120 },
+        "journeyDate": { "type": "string", "maxLength": 20 },
+        "departureTime": { "type": "string", "maxLength": 20 },
+        "bookingStatus": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "maskedPassenger": { "type": "string", "maxLength": 80 }
+      },
+      "required": ["pnr", "bookingId", "routeLabel", "journeyDate", "bookingStatus", "paymentStatus"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Immutable financial transaction record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "bookingId": { "type": "string", "maxLength": 128 },
+        "pnr": { "type": "string", "maxLength": 24 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "provider": { "type": "string", "enum": ["sslcommerz", "aamarpay", "counter_cash"] },
+        "transactionId": { "type": "string", "maxLength": 128 },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "paid", "failed", "refunded", "partially_refunded"] }
+      },
+      "required": ["id", "bookingId", "pnr", "userId", "ownerId", "provider", "transactionId", "amount", "status"]
+    },
+    "Refund": {
+      "title": "Refund",
+      "description": "Cancellation and refund request ledger",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "bookingId": { "type": "string", "maxLength": 128 },
+        "pnr": { "type": "string", "maxLength": 24 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "reason": { "type": "string", "maxLength": 500 },
+        "eligibleRefundAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["requested", "approved", "rejected", "processed"] }
+      },
+      "required": ["id", "bookingId", "pnr", "userId", "ownerId", "reason", "eligibleRefundAmount", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": { "schema": { "$ref": "#/entities/User" }, "description": "User profiles and RBAC roles" },
+    "/admins/{uid}": { "schema": "User", "description": "Admin role registry" },
+    "/bus_owners/{ownerId}": { "schema": { "$ref": "#/entities/BusOwner" }, "description": "Fleet owners under DeshLine" },
+    "/cities/{cityId}": { "schema": { "$ref": "#/entities/City" }, "description": "Cities catalog" },
+    "/routes/{routeId}": { "schema": { "$ref": "#/entities/Route" }, "description": "Intercity routes" },
+    "/counters/{counterId}": { "schema": "City", "description": "Authorized ticket counters" },
+    "/bus_types/{typeId}": { "schema": "Bus", "description": "Bus types & seat layout templates" },
+    "/buses/{busId}": { "schema": { "$ref": "#/entities/Bus" }, "description": "Fleet buses" },
+    "/trips/{tripId}": { "schema": { "$ref": "#/entities/Trip" }, "description": "Scheduled trips" },
+    "/trips/{tripId}/seats/{seatNumber}": { "schema": { "$ref": "#/entities/TripSeat" }, "description": "Live seat inventory per trip" },
+    "/bookings/{bookingId}": { "schema": { "$ref": "#/entities/Booking" }, "description": "Ticket bookings" },
+    "/ticket_verifications/{pnr}": { "schema": { "$ref": "#/entities/TicketVerification" }, "description": "Public QR/PNR verification status without PII" },
+    "/payments/{paymentId}": { "schema": { "$ref": "#/entities/Payment" }, "description": "Payment transaction records" },
+    "/refunds/{refundId}": { "schema": { "$ref": "#/entities/Refund" }, "description": "Cancellation and refund requests" },
+    "/settlements/{settlementId}": { "schema": "Payment", "description": "Bus owner settlements" },
+    "/coupons/{couponId}": { "schema": "Route", "description": "Discount coupons and offers" },
+    "/reviews/{reviewId}": { "schema": "Booking", "description": "Passenger trip reviews" },
+    "/saved_passengers/{savedId}": { "schema": "User", "description": "Saved passenger profiles" },
+    "/notifications/{notificationId}": { "schema": "User", "description": "System and booking notifications" },
+    "/support_tickets/{ticketId}": { "schema": "User", "description": "Customer and owner support tickets" },
+    "/settings/{settingId}": { "schema": "City", "description": "Company and cancellation policy settings" },
+    "/audit_logs/{logId}": { "schema": "User", "description": "Immutable admin/system audit log" }
+  }
+}

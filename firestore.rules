@@ -1,0 +1,408 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection Health Probe
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Core Identity & Validation Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBootstrapAdminEmail() {
+      return isVerified() && (
+        request.auth.token.email == 'arminayasmin09@gmail.com' ||
+        request.auth.token.email == 'rahulwp24@gmail.com'
+      );
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        isBootstrapAdminEmail() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isOwnerAccount() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserRole() == 'owner';
+    }
+
+    function isCounterStaff() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserRole() == 'counter_staff';
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'phone', 'role', 'status', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && data.role in ['admin', 'owner', 'passenger', 'counter_staff']
+        && data.status in ['active', 'inactive'];
+    }
+
+    function isValidBus(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'coachNumber', 'name', 'layoutType', 'isAc', 'totalSeats', 'approvalStatus', 'isActive'])
+        && data.keys().hasOnly(['id', 'ownerId', 'ownerName', 'coachNumber', 'registrationNumber', 'name', 'busTypeId', 'busTypeName', 'layoutType', 'isAc', 'totalSeats', 'amenities', 'imageUrl', 'approvalStatus', 'isActive', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.ownerId is string && data.ownerId.size() <= 128
+        && data.coachNumber is string && data.coachNumber.size() >= 1 && data.coachNumber.size() <= 40
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.layoutType in ['2+2', '2+1', 'sleeper', 'custom']
+        && data.isAc is bool
+        && data.totalSeats is int && data.totalSeats >= 10 && data.totalSeats <= 64
+        && data.approvalStatus in ['pending', 'approved', 'rejected']
+        && data.isActive is bool
+        && (!('amenities' in data) || (data.amenities is list && data.amenities.size() <= 12));
+    }
+
+    function isValidTrip(data) {
+      return data.keys().hasAll(['id', 'ownerId', 'busId', 'routeId', 'originName', 'destinationName', 'journeyDate', 'departureTime', 'fare', 'totalSeats', 'availableSeats', 'status'])
+        && data.keys().hasOnly(['id', 'ownerId', 'busId', 'busName', 'busTypeName', 'isAc', 'layoutType', 'busImageUrl', 'routeId', 'originCityId', 'originName', 'destinationCityId', 'destinationName', 'journeyDate', 'departureTime', 'arrivalTime', 'durationLabel', 'fare', 'totalSeats', 'availableSeats', 'boardingPoints', 'droppingPoints', 'status', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.ownerId is string && data.ownerId.size() <= 128
+        && data.busId is string && data.busId.size() <= 128
+        && data.routeId is string && data.routeId.size() <= 128
+        && data.originName is string && data.originName.size() <= 80
+        && data.destinationName is string && data.destinationName.size() <= 80
+        && data.journeyDate is string && data.journeyDate.size() <= 20
+        && data.departureTime is string && data.departureTime.size() <= 20
+        && data.fare is number && data.fare > 0 && data.fare <= 50000
+        && data.totalSeats is int && data.totalSeats >= 10 && data.totalSeats <= 64
+        && data.availableSeats is int && data.availableSeats >= 0 && data.availableSeats <= data.totalSeats
+        && data.status in ['scheduled', 'boarding', 'completed', 'cancelled']
+        && (!('boardingPoints' in data) || (data.boardingPoints is list && data.boardingPoints.size() <= 10))
+        && (!('droppingPoints' in data) || (data.droppingPoints is list && data.droppingPoints.size() <= 10));
+    }
+
+    function isValidTripSeat(data) {
+      return data.keys().hasAll(['seatNumber', 'row', 'col', 'deck', 'status'])
+        && data.keys().hasOnly(['seatNumber', 'row', 'col', 'deck', 'seatType', 'status', 'lockedByUid', 'lockExpiresAt', 'bookingId', 'updatedAt'])
+        && data.seatNumber is string && data.seatNumber.size() >= 1 && data.seatNumber.size() <= 16
+        && data.row is int && data.row >= 0 && data.row <= 20
+        && data.col is int && data.col >= 0 && data.col <= 10
+        && data.deck in ['lower', 'upper']
+        && data.status in ['available', 'locked', 'booked', 'blocked']
+        && (!('lockedByUid' in data) || data.lockedByUid == null || (data.lockedByUid is string && data.lockedByUid.size() <= 128))
+        && (!('lockExpiresAt' in data) || data.lockExpiresAt == null || data.lockExpiresAt is number)
+        && (!('bookingId' in data) || data.bookingId == null || (data.bookingId is string && data.bookingId.size() <= 128));
+    }
+
+    function isValidBooking(data) {
+      return data.keys().hasAll(['id', 'pnr', 'tripId', 'ownerId', 'userId', 'bookingChannel', 'passengerName', 'passengerPhone', 'seatNumbers', 'seatCount', 'totalFare', 'bookingStatus', 'paymentStatus', 'paymentMethod'])
+        && data.keys().hasOnly(['id', 'pnr', 'tripId', 'ownerId', 'userId', 'bookingChannel', 'counterId', 'counterStaffUid', 'passengerName', 'passengerPhone', 'passengerEmail', 'passengers', 'boardingPoint', 'droppingPoint', 'seatNumbers', 'seatCount', 'subtotal', 'discountAmount', 'couponCode', 'totalFare', 'bookingStatus', 'paymentStatus', 'paymentMethod', 'routeLabel', 'busName', 'busTypeName', 'journeyDate', 'departureTime', 'arrivalTime', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.pnr is string && data.pnr.size() >= 4 && data.pnr.size() <= 24
+        && data.tripId is string && data.tripId.size() <= 128
+        && data.ownerId is string && data.ownerId.size() <= 128
+        && data.userId is string && data.userId.size() <= 128
+        && data.bookingChannel in ['online', 'counter']
+        && data.passengerName is string && data.passengerName.size() >= 1 && data.passengerName.size() <= 120
+        && data.passengerPhone is string && data.passengerPhone.size() >= 5 && data.passengerPhone.size() <= 32
+        && data.seatNumbers is list && data.seatNumbers.size() >= 1 && data.seatNumbers.size() <= 6 && data.seatNumbers[0] is string
+        && data.seatCount is int && data.seatCount >= 1 && data.seatCount <= 6
+        && data.totalFare is number && data.totalFare >= 0 && data.totalFare <= 500000
+        && data.bookingStatus in ['pending', 'awaiting_payment', 'confirmed', 'cancelled', 'expired', 'refunded']
+        && data.paymentStatus in ['pending', 'processing', 'paid', 'failed', 'refunded', 'partially_refunded']
+        && data.paymentMethod in ['sslcommerz', 'aamarpay', 'counter_cash'];
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll(['id', 'bookingId', 'pnr', 'userId', 'ownerId', 'provider', 'transactionId', 'amount', 'status'])
+        && data.keys().hasOnly(['id', 'bookingId', 'pnr', 'userId', 'ownerId', 'provider', 'transactionId', 'sessionKey', 'amount', 'currency', 'status', 'verifiedServerSide', 'gatewayPayload', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.bookingId is string && data.bookingId.size() <= 128
+        && data.pnr is string && data.pnr.size() <= 24
+        && data.userId is string && data.userId.size() <= 128
+        && data.ownerId is string && data.ownerId.size() <= 128
+        && data.provider in ['sslcommerz', 'aamarpay', 'counter_cash']
+        && data.transactionId is string && data.transactionId.size() <= 128
+        && data.amount is number && data.amount >= 0 && data.amount <= 500000
+        && data.status in ['pending', 'processing', 'paid', 'failed', 'refunded', 'partially_refunded'];
+    }
+
+    function isValidRefund(data) {
+      return data.keys().hasAll(['id', 'bookingId', 'pnr', 'userId', 'ownerId', 'reason', 'originalAmount', 'eligibleRefundAmount', 'status'])
+        && data.keys().hasOnly(['id', 'bookingId', 'pnr', 'userId', 'ownerId', 'reason', 'originalAmount', 'eligibleRefundAmount', 'refundPercent', 'status', 'adminNote', 'processedByUid', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.bookingId is string && data.bookingId.size() <= 128
+        && data.pnr is string && data.pnr.size() <= 24
+        && data.userId is string && data.userId.size() <= 128
+        && data.ownerId is string && data.ownerId.size() <= 128
+        && data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 500
+        && data.originalAmount is number && data.originalAmount >= 0
+        && data.eligibleRefundAmount is number && data.eligibleRefundAmount >= 0 && data.eligibleRefundAmount <= data.originalAmount
+        && data.status in ['requested', 'approved', 'rejected', 'processed'];
+    }
+
+    // Users Collection (PII isolated to owner or admin; allows passenger/owner self-registration)
+    match /users/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isBootstrapAdminEmail();
+      allow create: if isSignedIn() && isValidId(uid) && request.auth.uid == uid
+        && isValidUser(incoming()) && incoming().uid == uid
+        && (incoming().role in ['passenger', 'owner'] || isAdmin());
+      allow update: if isSignedIn() && isValidId(uid) && isValidUser(incoming()) && (
+        isAdmin() ||
+        (request.auth.uid == uid
+          && incoming().uid == existing().uid
+          && incoming().role == existing().role
+          && incoming().status == existing().status
+          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'updatedAt']))
+      );
+      allow delete: if false;
+    }
+
+    // Admins Registry
+    match /admins/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isBootstrapAdminEmail();
+      allow create, update, delete: if isAdmin() && isValidId(uid);
+    }
+
+    // Bus Owners (Owner can self-register their own division record)
+    match /bus_owners/{ownerId} {
+      allow get: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isBootstrapAdminEmail());
+      allow create: if isSignedIn() && isValidId(ownerId) && (
+        isAdmin() ||
+        (incoming().userId == request.auth.uid && incoming().status == 'active')
+      );
+      allow update: if isSignedIn() && isValidId(ownerId) && (
+        isAdmin() ||
+        (existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['contactName', 'phone', 'updatedAt']))
+      );
+      allow delete: if isAdmin() && isValidId(ownerId);
+    }
+
+    // Public Catalog Collections
+    match /cities/{cityId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin() && isValidId(cityId);
+    }
+
+    match /routes/{routeId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin() && isValidId(routeId);
+    }
+
+    match /counters/{counterId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin() && isValidId(counterId);
+    }
+
+    match /bus_types/{typeId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin() && isValidId(typeId);
+    }
+
+    match /coupons/{couponId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin() && isValidId(couponId);
+    }
+
+    match /settings/{settingId} {
+      allow get, list: if true;
+      allow create, update, delete: if isAdmin() && isValidId(settingId);
+    }
+
+    // Buses
+    match /buses/{busId} {
+      allow get: if existing().approvalStatus == 'approved' || (isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin()));
+      allow list: if resource.data.approvalStatus == 'approved' || (isSignedIn() && (resource.data.ownerId == request.auth.uid || isBootstrapAdminEmail()));
+      allow create: if isSignedIn() && isValidId(busId) && isValidBus(incoming()) && (
+        isAdmin() ||
+        (isOwnerAccount() && incoming().ownerId == request.auth.uid && incoming().approvalStatus == 'pending')
+      );
+      allow update: if isSignedIn() && isValidId(busId) && isValidBus(incoming()) && (
+        isAdmin() ||
+        (existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().approvalStatus == existing().approvalStatus
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'busTypeId', 'busTypeName', 'layoutType', 'isAc', 'totalSeats', 'amenities', 'imageUrl', 'isActive', 'updatedAt']))
+      );
+      allow delete: if isAdmin() && isValidId(busId);
+    }
+
+    // Trips & Real-Time Seat Inventory
+    match /trips/{tripId} {
+      allow get, list: if true;
+      allow create: if isSignedIn() && isValidId(tripId) && isValidTrip(incoming()) && (
+        isAdmin() ||
+        (isOwnerAccount() && incoming().ownerId == request.auth.uid)
+      );
+      allow update: if isSignedIn() && isValidId(tripId) && isValidTrip(incoming()) && (
+        isAdmin() ||
+        (existing().ownerId == request.auth.uid && incoming().ownerId == existing().ownerId) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['availableSeats', 'updatedAt'])
+          && incoming().ownerId == existing().ownerId
+          && incoming().fare == existing().fare
+          && incoming().totalSeats == existing().totalSeats)
+      );
+      allow delete: if isAdmin() && isValidId(tripId);
+
+      match /seats/{seatNumber} {
+        allow get, list: if true;
+        allow create: if isSignedIn() && isValidId(tripId) && isValidId(seatNumber) && isValidTripSeat(incoming()) && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == request.auth.uid
+        );
+        allow update: if isSignedIn() && isValidId(tripId) && isValidId(seatNumber) && isValidTripSeat(incoming()) && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == request.auth.uid ||
+          (existing().status == 'available'
+            && incoming().status == 'locked'
+            && incoming().lockedByUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lockedByUid', 'lockExpiresAt', 'updatedAt'])) ||
+          (existing().status == 'locked'
+            && existing().lockExpiresAt is number
+            && existing().lockExpiresAt < request.time.toMillis()
+            && incoming().status == 'locked'
+            && incoming().lockedByUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lockedByUid', 'lockExpiresAt', 'updatedAt'])) ||
+          (existing().status == 'locked'
+            && existing().lockedByUid == request.auth.uid
+            && incoming().status in ['available', 'booked']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lockedByUid', 'lockExpiresAt', 'bookingId', 'updatedAt'])) ||
+          (existing().status == 'booked'
+            && incoming().status == 'available'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lockedByUid', 'lockExpiresAt', 'bookingId', 'updatedAt'])
+            && existing().bookingId is string
+            && get(/databases/$(database)/documents/bookings/$(existing().bookingId)).data.userId == request.auth.uid)
+        );
+        allow delete: if isAdmin() && isValidId(tripId) && isValidId(seatNumber);
+      }
+    }
+
+    // Bookings (Immutable historical ledger)
+    match /bookings/{bookingId} {
+      allow get: if isSignedIn() && (existing().userId == request.auth.uid || existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.ownerId == request.auth.uid || isBootstrapAdminEmail());
+      allow create: if isSignedIn() && isValidId(bookingId) && isValidBooking(incoming()) && (
+        incoming().userId == request.auth.uid || isAdmin() || isCounterStaff()
+      );
+      allow update: if isSignedIn() && isValidId(bookingId) && isValidBooking(incoming()) && (
+        isAdmin() ||
+        (existing().userId == request.auth.uid
+          && incoming().userId == existing().userId
+          && incoming().ownerId == existing().ownerId
+          && incoming().totalFare == existing().totalFare
+          && !(existing().bookingStatus in ['refunded'])
+          && incoming().diff(existing()).affectedKeys().hasOnly(['bookingStatus', 'paymentStatus', 'updatedAt']))
+      );
+      allow delete: if false;
+    }
+
+    // Public PII-free Ticket Verification (lookup by PNR only)
+    match /ticket_verifications/{pnr} {
+      allow get: if isValidId(pnr);
+      allow list: if isBootstrapAdminEmail();
+      allow create, update: if isSignedIn() && isValidId(pnr)
+        && incoming().keys().hasAll(['pnr', 'bookingId', 'routeLabel', 'journeyDate', 'bookingStatus', 'paymentStatus'])
+        && incoming().keys().hasOnly(['pnr', 'bookingId', 'routeLabel', 'busName', 'journeyDate', 'departureTime', 'seatNumbers', 'seatCount', 'bookingStatus', 'paymentStatus', 'maskedPassenger', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Payments (Immutable financial ledger)
+    match /payments/{paymentId} {
+      allow get: if isSignedIn() && (existing().userId == request.auth.uid || existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.ownerId == request.auth.uid || isBootstrapAdminEmail());
+      allow create: if isSignedIn() && isValidId(paymentId) && isValidPayment(incoming()) && (
+        incoming().userId == request.auth.uid || isAdmin() || isCounterStaff()
+      );
+      allow update: if isAdmin() && isValidId(paymentId) && isValidPayment(incoming());
+      allow delete: if false;
+    }
+
+    // Refunds
+    match /refunds/{refundId} {
+      allow get: if isSignedIn() && (existing().userId == request.auth.uid || existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.ownerId == request.auth.uid || isBootstrapAdminEmail());
+      allow create: if isSignedIn() && isValidId(refundId) && isValidRefund(incoming())
+        && incoming().userId == request.auth.uid && incoming().status == 'requested';
+      allow update: if isAdmin() && isValidId(refundId) && isValidRefund(incoming());
+      allow delete: if false;
+    }
+
+    // Settlements
+    match /settlements/{settlementId} {
+      allow get: if isSignedIn() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isBootstrapAdminEmail());
+      allow create, update: if isAdmin() && isValidId(settlementId);
+      allow delete: if false;
+    }
+
+    // Reviews
+    match /reviews/{reviewId} {
+      allow get: if existing().status == 'published' || (isSignedIn() && (existing().userId == request.auth.uid || isAdmin()));
+      allow list: if resource.data.status == 'published' || (isSignedIn() && (resource.data.userId == request.auth.uid || isBootstrapAdminEmail()));
+      allow create: if isSignedIn() && isValidId(reviewId) && incoming().userId == request.auth.uid
+        && incoming().keys().hasAll(['id', 'bookingId', 'tripId', 'userId', 'passengerName', 'routeLabel', 'rating', 'comment', 'status'])
+        && incoming().rating is int && incoming().rating >= 1 && incoming().rating <= 5
+        && incoming().comment is string && incoming().comment.size() <= 1000;
+      allow update, delete: if isAdmin() && isValidId(reviewId);
+    }
+
+    // Saved Passengers
+    match /saved_passengers/{savedId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(savedId) && incoming().userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && isValidId(savedId) && existing().userId == request.auth.uid;
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && (existing().targetUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.targetUid == request.auth.uid || isBootstrapAdminEmail());
+      allow create: if isSignedIn() && isValidId(notificationId);
+      allow update: if isSignedIn() && isValidId(notificationId) && (existing().targetUid == request.auth.uid || isAdmin());
+      allow delete: if isAdmin() && isValidId(notificationId);
+    }
+
+    // Support Tickets
+    match /support_tickets/{ticketId} {
+      allow get: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isBootstrapAdminEmail());
+      allow create: if isSignedIn() && isValidId(ticketId) && incoming().userId == request.auth.uid;
+      allow update: if isAdmin() && isValidId(ticketId);
+      allow delete: if false;
+    }
+
+    // Audit Logs
+    match /audit_logs/{logId} {
+      allow get: if isAdmin();
+      allow list: if isBootstrapAdminEmail();
+      allow create: if isSignedIn() && isValidId(logId) && incoming().actorUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}

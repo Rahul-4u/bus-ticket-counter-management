@@ -1,0 +1,6 @@
+{
+  "name": "DeshLine Paribahan",
+  "description": "Intercity bus ticket booking, real-time seat reservation, and fleet management platform for Bangladesh.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
