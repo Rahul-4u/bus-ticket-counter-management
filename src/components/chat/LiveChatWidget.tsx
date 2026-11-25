@@ -24,7 +24,11 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { fetchCompanySettings, fetchRoutes } from '../../services/firestoreService';
+import {
+  fetchCompanySettings,
+  fetchRoutes,
+  updateOwnWhatsappNumber,
+} from '../../services/firestoreService';
 import {
   createStaffChatAlertNotification,
   ensureChatSession,
@@ -41,10 +45,13 @@ import {
 import {
   answerVoiceCall,
   DEFAULT_SUPPORT_PHONE,
+  DEFAULT_SUPPORT_WHATSAPP,
+  showIncomingCallDesktopAlert,
   startToneLoop,
   startVoiceCall,
   subscribePassengerIncomingCalls,
   toTelHref,
+  toWhatsAppHref,
   unlockAudioElement,
   updateVoiceCallStatus,
   type ActiveCallController,
@@ -73,7 +80,7 @@ function formatDuration(sec: number): string {
 }
 
 export function LiveChatWidget() {
-  const { profile, loading: authLoading } = useAuth();
+  const { profile, loading: authLoading, refreshProfile } = useAuth();
   const navigate = useNavigate();
 
   const { data: settings } = useQuery({
@@ -82,6 +89,7 @@ export function LiveChatWidget() {
     staleTime: 60_000,
   });
   const supportPhone = settings?.supportPhone || DEFAULT_SUPPORT_PHONE;
+  const supportWhatsapp = settings?.supportWhatsapp || DEFAULT_SUPPORT_WHATSAPP;
 
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<ChatSession | null>(null);
@@ -96,6 +104,10 @@ export function LiveChatWidget() {
   const [sessionId, setSessionId] = useState<string>('');
   const [visitorToken, setVisitorToken] = useState<string>('');
 
+  // Passenger WhatsApp number capture before starting call
+  const [showCallSetup, setShowCallSetup] = useState(false);
+  const [passengerWhatsapp, setPassengerWhatsapp] = useState('');
+
   // WhatsApp-style in-browser WebRTC live voice call state
   const [callStatus, setCallStatus] = useState<VoiceCallStatus | null>(null);
   const [incomingCall, setIncomingCall] = useState<VoiceCallSession | null>(null);
@@ -109,6 +121,14 @@ export function LiveChatWidget() {
   const callControllerRef = useRef<ActiveCallController | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (profile) {
+      setPassengerWhatsapp(profile.whatsappNumber || profile.phone || '');
+    } else {
+      setPassengerWhatsapp('');
+    }
+  }, [profile?.uid, profile?.whatsappNumber, profile?.phone]);
 
   // Bind remoteStream cleanly to persistent <audio> element
   useEffect(() => {
@@ -137,6 +157,7 @@ export function LiveChatWidget() {
       callControllerRef.current = null;
       setCallStatus(null);
       setIncomingCall(null);
+      setShowCallSetup(false);
       setRemoteStream(null);
       setSession(null);
       setMessages([]);
@@ -182,13 +203,21 @@ export function LiveChatWidget() {
     return () => unsub();
   }, [profile?.uid]);
 
-  // WhatsApp-style ringback / incoming ringtone while ringing
+  // WhatsApp-style ringback / incoming ringtone + desktop/tab alert
   useEffect(() => {
     if (callStatus === 'ringing') {
       return startToneLoop('dialing');
     }
     if (incomingCall && callStatus !== 'active') {
-      return startToneLoop('incoming');
+      const stopTone = startToneLoop('incoming');
+      const stopAlert = showIncomingCallDesktopAlert(
+        `Incoming Call: ${incomingCall.callerName}`,
+        'DeshLine Support is calling you on the website.'
+      );
+      return () => {
+        stopTone();
+        stopAlert();
+      };
     }
   }, [callStatus, incomingCall?.id]);
 
@@ -262,7 +291,7 @@ export function LiveChatWidget() {
         userId: currentProfile.uid,
         visitorName: currentProfile.displayName || currentProfile.email.split('@')[0] || 'Passenger',
         visitorEmail: currentProfile.email || undefined,
-        visitorPhone: currentProfile.phone || undefined,
+        visitorPhone: currentProfile.whatsappNumber || currentProfile.phone || undefined,
       });
       if (cancelled) return;
       setSession(ensured);
@@ -356,22 +385,33 @@ export function LiveChatWidget() {
     }
   }, [profile, incomingCall, callStatus, callPeerName, callSeconds, session?.status, session?.assignedAgentName]);
 
-  const handleStartLiveVoiceCall = async () => {
+  const beginLiveSiteCall = async (whatsappToSave: string) => {
     if (!profile || callStatus === 'ringing' || callStatus === 'active') return;
     unlockAudioElement(remoteAudioRef.current);
+    setShowCallSetup(false);
     setCallError('');
     setCallMuted(false);
     setRemoteStream(null);
     setCallStatus('ringing');
     setCallPeerName('DeshLine Support');
 
+    const cleanWa = whatsappToSave.trim();
+    if (cleanWa) {
+      await updateOwnWhatsappNumber(profile.uid, cleanWa).catch(() => {});
+      void refreshProfile().catch(() => {});
+      if (session) {
+        void updateChatSessionMeta(session.id, { visitorPhone: cleanWa }).catch(() => {});
+      }
+    }
+
     try {
+      const passengerName = profile.displayName || profile.email.split('@')[0] || 'Passenger';
       const controller = await startVoiceCall({
         callerUid: profile.uid,
-        callerName: profile.displayName || profile.email.split('@')[0] || 'Passenger',
+        callerName: passengerName,
         callerRole: 'passenger',
         callerEmail: profile.email || undefined,
-        callerPhone: profile.phone || undefined,
+        callerPhone: cleanWa || profile.whatsappNumber || profile.phone || undefined,
         chatSessionId: session?.id ?? null,
         onRemoteStream: (stream) => {
           setRemoteStream(new MediaStream(stream.getTracks()));
@@ -380,7 +420,7 @@ export function LiveChatWidget() {
           setCallStatus(status);
           if (call.calleeName) setCallPeerName(call.calleeName);
           if (status === 'declined') {
-            setCallError('এজেন্ট কলটি রিসিভ করতে পারেননি। অনুগ্রহ করে আবার চেষ্টা করুন বা হটলাইনে কল করুন।');
+            setCallError('এজেন্ট কলটি রিসিভ করতে পারেননি। সরাসরি WhatsApp-এ কল করতে পারেন।');
             setRemoteStream(null);
             callControllerRef.current = null;
           } else if (status === 'ended' || status === 'missed') {
@@ -399,11 +439,26 @@ export function LiveChatWidget() {
         },
       });
       callControllerRef.current = controller;
+
+      // Also notify site email / dashboard so Admin knows a call started even if away from site
+      void triggerHumanSupportEmail({
+        sessionId: session?.id || controller.callId,
+        visitorName: passengerName,
+        visitorEmail: profile.email || undefined,
+        visitorPhone: cleanWa || profile.whatsappNumber || profile.phone || undefined,
+        lastMessage: `Incoming live call from ${passengerName} (WhatsApp: ${cleanWa || 'Not provided'})`,
+      }).catch(() => {});
     } catch (err) {
       setCallStatus(null);
       setRemoteStream(null);
       setCallError(err instanceof Error ? err.message : 'কল শুরু করা যায়নি।');
     }
+  };
+
+  const handleVoiceCallButtonClick = () => {
+    if (!profile || callStatus === 'ringing' || callStatus === 'active') return;
+    setCallError('');
+    setShowCallSetup(true);
   };
 
   const handleAnswerIncomingCall = async () => {
@@ -476,7 +531,12 @@ export function LiveChatWidget() {
     if (!profile) return;
     const cleanName = profile.displayName || currentSession.visitorName || 'Passenger';
     const cleanEmail = profile.email || currentSession.visitorEmail || '';
-    const cleanPhone = profile.phone || currentSession.visitorPhone || '';
+    const cleanPhone =
+      passengerWhatsapp.trim() ||
+      profile.whatsappNumber ||
+      profile.phone ||
+      currentSession.visitorPhone ||
+      '';
 
     const handoffText =
       'আপনার অনুরোধটি আমাদের Admin এবং Bus Counter Support টিমের কাছে পাঠানো হয়েছে এবং সাইটের অফিশিয়াল মেইলে নোটিফিকেশন পাঠানো হয়েছে। অনুগ্রহ করে একটু অপেক্ষা করুন—কিছুক্ষণের মধ্যেই আমাদের একজন প্রতিনিধি এই চ্যাটে সরাসরি যুক্ত হবেন।';
@@ -540,6 +600,7 @@ export function LiveChatWidget() {
     setChatError('');
 
     const passengerName = profile.displayName || profile.email.split('@')[0] || 'Passenger';
+    const knownPhone = passengerWhatsapp.trim() || profile.whatsappNumber || profile.phone || '';
     const optimisticUserMsg: ChatMessage = {
       id: `local_${Date.now()}_u`,
       sessionId,
@@ -559,7 +620,7 @@ export function LiveChatWidget() {
           userId: profile.uid,
           visitorName: passengerName,
           visitorEmail: profile.email || undefined,
-          visitorPhone: profile.phone || undefined,
+          visitorPhone: knownPhone || undefined,
         }));
       if (!session) setSession(activeSession);
 
@@ -575,7 +636,7 @@ export function LiveChatWidget() {
         visitorDetails: {
           visitorName: passengerName,
           ...(profile.email ? { visitorEmail: profile.email } : {}),
-          ...(profile.phone ? { visitorPhone: profile.phone } : {}),
+          ...(knownPhone ? { visitorPhone: knownPhone } : {}),
         },
       });
 
@@ -679,438 +740,582 @@ export function LiveChatWidget() {
       callStatus === 'active' ||
       callStatus === 'missed');
 
+  const whatsappDirectLink = toWhatsAppHref(
+    supportWhatsapp,
+    `Hello DeshLine Support! Name: ${profile?.displayName || 'Passenger'}${
+      passengerWhatsapp.trim() ? `, My WhatsApp: ${passengerWhatsapp.trim()}` : ''
+    }`
+  );
+
   return (
-    <div className="fixed bottom-5 right-5 z-50 no-print">
+    <>
       {/* Persistent audio element (never conditionally unmounted) */}
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
-      {!open ? (
-        <button
-          type="button"
-          onClick={() => {
-            unlockAudioElement(remoteAudioRef.current);
-            setOpen(true);
-          }}
-          className="group relative flex items-center gap-2.5 px-4 py-3.5 rounded-full bg-[#0B1F3A] hover:bg-orange-600 text-white shadow-2xl border border-white/15 transition-all cursor-pointer"
-          aria-label="Open Live AI Support Chat"
-        >
-          <span className="w-8 h-8 rounded-full bg-orange-600 group-hover:bg-white group-hover:text-orange-600 flex items-center justify-center transition-colors">
-            <MessageCircle className="w-4 h-4" />
-          </span>
-          <div className="hidden sm:block text-left pr-1">
-            <p className="text-xs font-bold leading-tight">AI Live Support</p>
-            <p className="text-[10px] text-slate-300 group-hover:text-orange-100 leading-tight">
-              Chat &amp; Voice Call
-            </p>
-          </div>
-          {unreadCount > 0 && (
-            <span className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-600 text-white text-[11px] font-bold flex items-center justify-center shadow">
-              {unreadCount}
+      {/* Unmissable Full-Screen WhatsApp-Style Incoming Call Popup for Passenger */}
+      {profile && incomingCall && callStatus !== 'active' && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 no-print">
+          <div className="w-full max-w-sm bg-gradient-to-b from-[#0B1F3A] via-[#0F2C4C] to-[#071527] text-white rounded-3xl border border-emerald-500/50 shadow-2xl p-7 text-center space-y-6">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-semibold">
+              <PhoneIncoming className="w-3.5 h-3.5 animate-bounce" />
+              DeshLine Incoming Voice Call
             </span>
-          )}
-        </button>
-      ) : (
-        <div className="relative w-[calc(100vw-2rem)] sm:w-[395px] h-[560px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-          {/* Header */}
-          <div className="bg-[#0B1F3A] text-white px-4 py-3.5 flex items-center justify-between gap-2 shrink-0">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-orange-600 flex items-center justify-center shrink-0">
-                {callStatus === 'ringing' || callStatus === 'active' || incomingCall ? (
-                  <PhoneCall className="w-4 h-4 animate-pulse" />
-                ) : session?.status === 'human_active' || session?.status === 'human_requested' ? (
-                  <Headset className="w-4 h-4" />
-                ) : (
-                  <Bot className="w-4 h-4" />
-                )}
+
+            <div className="relative flex flex-col items-center space-y-3">
+              <div className="relative flex items-center justify-center">
+                <span className="absolute w-28 h-28 rounded-full bg-emerald-500/25 animate-ping" />
+                <div className="relative w-24 h-24 rounded-full bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-3xl font-extrabold shadow-xl border-2 border-white/25">
+                  {(incomingCall.callerName[0] || 'D').toUpperCase()}
+                </div>
               </div>
-              <div className="min-w-0">
-                <p className="text-sm font-bold truncate font-display">DeshLine Live Support</p>
-                <p className="text-[11px] text-slate-300 flex items-center gap-1.5 truncate">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${statusMeta.dot}`} />
-                  <span className="truncate">{statusMeta.label}</span>
-                </p>
+              <div>
+                <h3 className="text-xl font-extrabold font-display">{incomingCall.callerName}</h3>
+                <p className="text-xs text-emerald-300 mt-1">Calling you from DeshLine Support...</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1 shrink-0">
-              <a
-                href={toTelHref(supportPhone)}
-                title={`Call Hotline: ${supportPhone}`}
-                className="p-1.5 rounded-lg text-emerald-300 hover:text-white hover:bg-white/10 transition-colors"
-              >
-                <PhoneCall className="w-4 h-4" />
-              </a>
-              {profile && (
+            <div className="flex items-center justify-center gap-10 pt-2">
+              <div className="flex flex-col items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleStartNewChat}
-                  title="Start New Chat"
-                  className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  onClick={handleDeclineIncomingCall}
+                  className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-xl cursor-pointer"
+                  aria-label="Decline call"
                 >
-                  <Plus className="w-4 h-4" />
+                  <PhoneOff className="w-7 h-7" />
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                title="Close"
-                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+                <span className="text-xs text-slate-300">Decline</span>
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAnswerIncomingCall}
+                  className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-xl animate-pulse cursor-pointer"
+                  aria-label="Accept call"
+                >
+                  <PhoneCall className="w-7 h-7" />
+                </button>
+                <span className="text-xs text-emerald-300 font-bold">Accept</span>
+              </div>
             </div>
           </div>
+        </div>
+      )}
 
-          {!authLoading && !profile ? (
-            <div className="flex-1 p-6 flex flex-col items-center justify-center text-center bg-slate-50/70 dark:bg-slate-950/40 space-y-5">
-              <div className="w-14 h-14 rounded-2xl bg-orange-100 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400 flex items-center justify-center">
-                <ShieldCheck className="w-7 h-7" />
+      <div className="fixed bottom-5 right-5 z-50 no-print">
+        {!open ? (
+          <button
+            type="button"
+            onClick={() => {
+              unlockAudioElement(remoteAudioRef.current);
+              setOpen(true);
+            }}
+            className="group relative flex items-center gap-2.5 px-4 py-3.5 rounded-full bg-[#0B1F3A] hover:bg-orange-600 text-white shadow-2xl border border-white/15 transition-all cursor-pointer"
+            aria-label="Open Live AI Support Chat"
+          >
+            <span className="w-8 h-8 rounded-full bg-orange-600 group-hover:bg-white group-hover:text-orange-600 flex items-center justify-center transition-colors">
+              <MessageCircle className="w-4 h-4" />
+            </span>
+            <div className="hidden sm:block text-left pr-1">
+              <p className="text-xs font-bold leading-tight">AI Live Support</p>
+              <p className="text-[10px] text-slate-300 group-hover:text-orange-100 leading-tight">
+                Chat &amp; Voice Call
+              </p>
+            </div>
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-600 text-white text-[11px] font-bold flex items-center justify-center shadow">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+        ) : (
+          <div className="relative w-[calc(100vw-2rem)] sm:w-[395px] h-[560px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="bg-[#0B1F3A] text-white px-4 py-3.5 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-orange-600 flex items-center justify-center shrink-0">
+                  {callStatus === 'ringing' || callStatus === 'active' || incomingCall ? (
+                    <PhoneCall className="w-4 h-4 animate-pulse" />
+                  ) : session?.status === 'human_active' || session?.status === 'human_requested' ? (
+                    <Headset className="w-4 h-4" />
+                  ) : (
+                    <Bot className="w-4 h-4" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-bold truncate font-display">DeshLine Live Support</p>
+                  <p className="text-[11px] text-slate-300 flex items-center gap-1.5 truncate">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${statusMeta.dot}`} />
+                    <span className="truncate">{statusMeta.label}</span>
+                  </p>
+                </div>
               </div>
-              <div className="space-y-2 max-w-xs">
-                <h3 className="text-base font-extrabold text-slate-950 dark:text-white font-display">
-                  লগইন বা সাইন-আপ প্রয়োজন
-                </h3>
-                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  লাইভ AI এবং Bus Counter সাপোর্টে চ্যাট বা ব্রাউজার ভয়েস কল করতে আগে Sign In অথবা Create Account করুন। অথবা সরাসরি হটলাইনে কল করতে পারেন।
-                </p>
-              </div>
-              <div className="w-full max-w-xs space-y-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpen(false);
-                    navigate('/login');
-                  }}
-                  className="w-full h-10 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <LogIn className="w-4 h-4" />
-                  Sign In to Chat &amp; Call
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpen(false);
-                    navigate('/register');
-                  }}
-                  className="w-full h-10 rounded-xl bg-[#0B1F3A] hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <UserPlus className="w-4 h-4 text-orange-400" />
-                  Create Account (Sign Up)
-                </button>
+
+              <div className="flex items-center gap-1 shrink-0">
                 <a
                   href={toTelHref(supportPhone)}
-                  className="w-full h-10 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 hover:bg-emerald-100"
+                  title={`Call Hotline: ${supportPhone}`}
+                  className="p-1.5 rounded-lg text-emerald-300 hover:text-white hover:bg-white/10 transition-colors"
                 >
                   <PhoneCall className="w-4 h-4" />
-                  Call Hotline ({supportPhone})
                 </a>
+                {profile && (
+                  <button
+                    type="button"
+                    onClick={handleStartNewChat}
+                    title="Start New Chat"
+                    className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  title="Close"
+                  className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
             </div>
-          ) : showWhatsAppCallOverlay ? (
-            /* WhatsApp-style Full Voice Call Screen */
-            <div className="flex-1 bg-gradient-to-b from-[#0B1F3A] via-[#0F2C4C] to-[#071527] text-white p-6 flex flex-col items-center justify-between text-center">
-              <div className="space-y-1">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-[11px] font-semibold text-emerald-300">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  DeshLine Encrypted Voice Call
-                </span>
-              </div>
 
-              <div className="space-y-4 flex flex-col items-center">
-                <div className="relative flex items-center justify-center">
-                  {(callStatus === 'ringing' || incomingCall) && (
-                    <span className="absolute w-28 h-28 rounded-full bg-emerald-500/20 animate-ping" />
+            {!authLoading && !profile ? (
+              <div className="flex-1 p-6 flex flex-col items-center justify-center text-center bg-slate-50/70 dark:bg-slate-950/40 space-y-5">
+                <div className="w-14 h-14 rounded-2xl bg-orange-100 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400 flex items-center justify-center">
+                  <ShieldCheck className="w-7 h-7" />
+                </div>
+                <div className="space-y-2 max-w-xs">
+                  <h3 className="text-base font-extrabold text-slate-950 dark:text-white font-display">
+                    লগইন বা সাইন-আপ প্রয়োজন
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    লাইভ AI এবং Bus Counter সাপোর্টে চ্যাট বা ব্রাউজার ভয়েস কল করতে আগে Sign In অথবা Create Account করুন। অথবা সরাসরি হটলাইন / WhatsApp-এ কল করতে পারেন।
+                  </p>
+                </div>
+                <div className="w-full max-w-xs space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      navigate('/login');
+                    }}
+                    className="w-full h-10 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    Sign In to Chat &amp; Call
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      navigate('/register');
+                    }}
+                    className="w-full h-10 rounded-xl bg-[#0B1F3A] hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <UserPlus className="w-4 h-4 text-orange-400" />
+                    Create Account (Sign Up)
+                  </button>
+                  <a
+                    href={whatsappDirectLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2"
+                  >
+                    <PhoneCall className="w-4 h-4" />
+                    Call on WhatsApp ({supportWhatsapp})
+                  </a>
+                </div>
+              </div>
+            ) : showWhatsAppCallOverlay ? (
+              /* WhatsApp-style Full Voice Call Screen */
+              <div className="flex-1 bg-gradient-to-b from-[#0B1F3A] via-[#0F2C4C] to-[#071527] text-white p-5 flex flex-col items-center justify-between text-center">
+                <div className="space-y-1">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-[11px] font-semibold text-emerald-300">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    DeshLine Live + WhatsApp ({supportWhatsapp})
+                  </span>
+                </div>
+
+                <div className="space-y-3.5 flex flex-col items-center">
+                  <div className="relative flex items-center justify-center">
+                    {(callStatus === 'ringing' || incomingCall) && (
+                      <span className="absolute w-28 h-28 rounded-full bg-emerald-500/20 animate-ping" />
+                    )}
+                    <div className="relative w-22 h-22 rounded-full bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-3xl font-extrabold shadow-xl border-2 border-white/20">
+                      {incomingCall ? (
+                        <PhoneIncoming className="w-9 h-9 animate-bounce" />
+                      ) : callStatus === 'missed' ? (
+                        <PhoneMissed className="w-9 h-9 text-amber-300" />
+                      ) : (
+                        (callPeerName[0] || 'D').toUpperCase()
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="text-lg font-extrabold font-display">{callPeerName}</h3>
+                    <p className="text-xs text-emerald-300 font-mono mt-1">
+                      {incomingCall
+                        ? 'Incoming Voice Call...'
+                        : callStatus === 'ringing'
+                          ? 'Ringing Site Admin / Counter...'
+                          : callStatus === 'active'
+                            ? `Connected · ${formatDuration(callSeconds)}`
+                            : 'No Answer on Site (Missed)'}
+                    </p>
+                  </div>
+
+                  {audioBlocked && (
+                    <button
+                      type="button"
+                      onClick={handleEnableBlockedAudio}
+                      className="px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 shadow-lg animate-pulse cursor-pointer"
+                    >
+                      <Volume2 className="w-4 h-4" />
+                      Tap to Hear Audio
+                    </button>
                   )}
-                  <div className="relative w-24 h-24 rounded-full bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-3xl font-extrabold shadow-xl border-2 border-white/20">
-                    {incomingCall ? (
-                      <PhoneIncoming className="w-10 h-10 animate-bounce" />
-                    ) : callStatus === 'missed' ? (
-                      <PhoneMissed className="w-10 h-10 text-amber-300" />
-                    ) : (
-                      (callPeerName[0] || 'D').toUpperCase()
+
+                  {callStatus === 'ringing' && (
+                    <a
+                      href={whatsappDirectLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow"
+                    >
+                      <PhoneCall className="w-3.5 h-3.5" />
+                      সাইটে না পেলে WhatsApp-এ কল দিন ({supportWhatsapp})
+                    </a>
+                  )}
+                </div>
+
+                {incomingCall ? (
+                  <div className="w-full flex items-center justify-center gap-8 pb-2">
+                    <div className="flex flex-col items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleDeclineIncomingCall}
+                        className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg cursor-pointer"
+                        aria-label="Decline call"
+                      >
+                        <PhoneOff className="w-6 h-6" />
+                      </button>
+                      <span className="text-[11px] text-slate-300">Decline</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleAnswerIncomingCall}
+                        className="w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-lg cursor-pointer"
+                        aria-label="Answer call"
+                      >
+                        <PhoneCall className="w-6 h-6" />
+                      </button>
+                      <span className="text-[11px] text-emerald-300 font-semibold">Accept</span>
+                    </div>
+                  </div>
+                ) : callStatus === 'missed' ? (
+                  <div className="w-full space-y-2 pb-1">
+                    <a
+                      href={whatsappDirectLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5"
+                    >
+                      <PhoneCall className="w-4 h-4" />
+                      Call on WhatsApp ({supportWhatsapp})
+                    </a>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void beginLiveSiteCall(passengerWhatsapp)}
+                        className="flex-1 h-9 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Try Site Call Again
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCallStatus(null)}
+                        className="flex-1 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Back to Chat
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-full flex items-center justify-center gap-6 pb-2">
+                    <div className="flex flex-col items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleToggleMute}
+                        className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+                          callMuted ? 'bg-amber-500 text-slate-950' : 'bg-white/15 hover:bg-white/25 text-white'
+                        }`}
+                        aria-label={callMuted ? 'Unmute mic' : 'Mute mic'}
+                      >
+                        {callMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                      </button>
+                      <span className="text-[11px] text-slate-300">{callMuted ? 'Unmute' : 'Mute'}</span>
+                    </div>
+
+                    <div className="flex flex-col items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleEndVoiceCall}
+                        className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg cursor-pointer"
+                        aria-label="End call"
+                      >
+                        <PhoneOff className="w-6 h-6" />
+                      </button>
+                      <span className="text-[11px] text-red-300 font-semibold">End</span>
+                    </div>
+
+                    <div className="flex flex-col items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleEnableBlockedAudio}
+                        className="w-12 h-12 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors cursor-pointer"
+                        aria-label="Test speaker"
+                      >
+                        <Volume2 className="w-5 h-5" />
+                      </button>
+                      <span className="text-[11px] text-slate-300">Speaker</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : showCallSetup ? (
+              /* Passenger WhatsApp Number Input & Dual Call Launcher */
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void beginLiveSiteCall(passengerWhatsapp);
+                }}
+                className="flex-1 p-5 flex flex-col justify-between bg-slate-50/70 dark:bg-slate-950/40"
+              >
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                      <PhoneCall className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-950 dark:text-white">
+                        সাপোর্টে সরাসরি কল করুন
+                      </h3>
+                      <p className="text-[11px] text-slate-500">
+                        Site Live Call + WhatsApp ({supportWhatsapp})
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                      আপনার WhatsApp নাম্বার দিন
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      value={passengerWhatsapp}
+                      onChange={(e) => setPassengerWhatsapp(e.target.value)}
+                      placeholder="01XXXXXXXXX"
+                      className="w-full h-10 px-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                      আপনি কল দিলে সাইটে থাকা Admin ও Counter Staff-এর কাছে পপআপ যাবে এবং এই নাম্বারটি সেভ থাকবে যাতে সাইটে না থাকলেও আপনার WhatsApp-এ যোগাযোগ করা যায়।
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-4">
+                  <button
+                    type="submit"
+                    className="w-full h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <PhoneCall className="w-4 h-4" />
+                    Start Site Voice Call Now
+                  </button>
+                  <a
+                    href={whatsappDirectLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full h-10 rounded-xl bg-[#0B1F3A] hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-2"
+                  >
+                    <PhoneCall className="w-4 h-4 text-emerald-400" />
+                    Call on WhatsApp ({supportWhatsapp})
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setShowCallSetup(false)}
+                    className="w-full h-9 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                  >
+                    Back to Chat
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                {/* Human & Voice Call Action Bar */}
+                <div className="px-3 py-2 bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
+                  {session?.status === 'human_requested' ? (
+                    <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium flex items-center gap-1.5 truncate">
+                      <MailCheck className="w-3.5 h-3.5 shrink-0" />
+                      Counter &amp; Admin notified
+                    </span>
+                  ) : session?.status === 'human_active' ? (
+                    <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5 truncate">
+                      <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                      {session.assignedAgentName || 'Support'}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1 truncate">
+                      <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                      {profile?.displayName}
+                    </span>
+                  )}
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleVoiceCallButtonClick}
+                      title="Call Support (Site + WhatsApp)"
+                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <PhoneCall className="w-3 h-3" />
+                      Call / WA
+                    </button>
+                    {session?.status !== 'human_requested' && session?.status !== 'human_active' && (
+                      <button
+                        type="button"
+                        onClick={handleManualHumanClick}
+                        disabled={sending || !session}
+                        className="px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Headset className="w-3 h-3" />
+                        Human
+                      </button>
                     )}
                   </div>
                 </div>
 
-                <div>
-                  <h3 className="text-lg font-extrabold font-display">{callPeerName}</h3>
-                  <p className="text-xs text-emerald-300 font-mono mt-1">
-                    {incomingCall
-                      ? 'Incoming Voice Call...'
-                      : callStatus === 'ringing'
-                        ? 'Ringing... Waiting for Admin / Counter'
-                        : callStatus === 'active'
-                          ? `Connected · ${formatDuration(callSeconds)}`
-                          : 'No Answer (Missed)'}
-                  </p>
-                </div>
-
-                {audioBlocked && (
-                  <button
-                    type="button"
-                    onClick={handleEnableBlockedAudio}
-                    className="px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 shadow-lg animate-pulse cursor-pointer"
-                  >
-                    <Volume2 className="w-4 h-4" />
-                    Tap to Hear Audio
-                  </button>
-                )}
-              </div>
-
-              {incomingCall ? (
-                <div className="w-full flex items-center justify-center gap-8 pb-2">
-                  <div className="flex flex-col items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleDeclineIncomingCall}
-                      className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg cursor-pointer"
-                      aria-label="Decline call"
+                {callError && (
+                  <div className="px-3.5 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-200 dark:border-red-900 text-[11px] text-red-700 dark:text-red-300 flex items-center justify-between gap-2 shrink-0">
+                    <span className="truncate">{callError}</span>
+                    <a
+                      href={whatsappDirectLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2 py-1 rounded bg-emerald-600 text-white font-semibold shrink-0"
                     >
-                      <PhoneOff className="w-6 h-6" />
-                    </button>
-                    <span className="text-[11px] text-slate-300">Decline</span>
-                  </div>
-                  <div className="flex flex-col items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleAnswerIncomingCall}
-                      className="w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-lg cursor-pointer"
-                      aria-label="Answer call"
-                    >
-                      <PhoneCall className="w-6 h-6" />
-                    </button>
-                    <span className="text-[11px] text-emerald-300 font-semibold">Accept</span>
-                  </div>
-                </div>
-              ) : callStatus === 'missed' ? (
-                <div className="w-full space-y-2.5 pb-2">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleStartLiveVoiceCall}
-                      className="flex-1 h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      <PhoneCall className="w-4 h-4" />
-                      Call Again
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCallStatus(null)}
-                      className="flex-1 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer"
-                    >
-                      Back to Chat
-                    </button>
-                  </div>
-                  <a
-                    href={toTelHref(supportPhone)}
-                    className="w-full h-9 rounded-xl border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-white/5"
-                  >
-                    <PhoneCall className="w-3.5 h-3.5" />
-                    Call Phone Hotline ({supportPhone})
-                  </a>
-                </div>
-              ) : (
-                <div className="w-full flex items-center justify-center gap-6 pb-2">
-                  <div className="flex flex-col items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleToggleMute}
-                      className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
-                        callMuted ? 'bg-amber-500 text-slate-950' : 'bg-white/15 hover:bg-white/25 text-white'
-                      }`}
-                      aria-label={callMuted ? 'Unmute mic' : 'Mute mic'}
-                    >
-                      {callMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                    </button>
-                    <span className="text-[11px] text-slate-300">{callMuted ? 'Unmute' : 'Mute'}</span>
-                  </div>
-
-                  <div className="flex flex-col items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleEndVoiceCall}
-                      className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg cursor-pointer"
-                      aria-label="End call"
-                    >
-                      <PhoneOff className="w-6 h-6" />
-                    </button>
-                    <span className="text-[11px] text-red-300 font-semibold">End</span>
-                  </div>
-
-                  <div className="flex flex-col items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={handleEnableBlockedAudio}
-                      className="w-12 h-12 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors cursor-pointer"
-                      aria-label="Test speaker"
-                    >
-                      <Volume2 className="w-5 h-5" />
-                    </button>
-                    <span className="text-[11px] text-slate-300">Speaker</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              {/* Human & Voice Call Action Bar */}
-              <div className="px-3 py-2 bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
-                {session?.status === 'human_requested' ? (
-                  <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium flex items-center gap-1.5 truncate">
-                    <MailCheck className="w-3.5 h-3.5 shrink-0" />
-                    Counter &amp; Admin notified
-                  </span>
-                ) : session?.status === 'human_active' ? (
-                  <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5 truncate">
-                    <UserCheck className="w-3.5 h-3.5 shrink-0" />
-                    {session.assignedAgentName || 'Support'}
-                  </span>
-                ) : (
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1 truncate">
-                    <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
-                    {profile?.displayName}
-                  </span>
-                )}
-
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleStartLiveVoiceCall}
-                    title="Start live WhatsApp-style browser voice call"
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <PhoneCall className="w-3 h-3" />
-                    Voice Call
-                  </button>
-                  {session?.status !== 'human_requested' && session?.status !== 'human_active' && (
-                    <button
-                      type="button"
-                      onClick={handleManualHumanClick}
-                      disabled={sending || !session}
-                      className="px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
-                    >
-                      <Headset className="w-3 h-3" />
-                      Human
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {callError && (
-                <div className="px-3.5 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-200 dark:border-red-900 text-[11px] text-red-700 dark:text-red-300 flex items-center justify-between gap-2 shrink-0">
-                  <span>{callError}</span>
-                  <a
-                    href={toTelHref(supportPhone)}
-                    className="px-2 py-1 rounded bg-red-600 text-white font-semibold shrink-0"
-                  >
-                    Call {supportPhone}
-                  </a>
-                </div>
-              )}
-
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-50/60 dark:bg-slate-950/40">
-                {(connecting || authLoading) && displayedMessages.length === 0 && (
-                  <div className="flex items-center gap-2 text-xs text-slate-500 px-1 py-2">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
-                    চ্যাট সংযুক্ত হচ্ছে...
+                      WhatsApp ({supportWhatsapp})
+                    </a>
                   </div>
                 )}
 
-                {chatError && (
-                  <div className="text-[11px] px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-200">
-                    {chatError}
-                  </div>
-                )}
-
-                {displayedMessages.map((m) => {
-                  const isPassenger = m.senderRole === 'passenger';
-                  const isStaff = m.senderRole === 'admin' || m.senderRole === 'counter_staff';
-                  return (
-                    <div
-                      key={m.id}
-                      className={`flex flex-col ${isPassenger ? 'items-end' : 'items-start'}`}
-                    >
-                      <span className="text-[10px] font-semibold text-slate-400 mb-1 px-1 flex items-center gap-1">
-                        {isStaff && <Headset className="w-3 h-3 text-emerald-500" />}
-                        {m.senderRole === 'ai' && <Bot className="w-3 h-3 text-orange-500" />}
-                        {m.senderName}
-                        {m.senderRole === 'counter_staff' && ' (Bus Counter)'}
-                        {m.senderRole === 'admin' && ' (Admin)'}
-                        {' · '}
-                        {formatTime(m.createdAt)}
-                      </span>
-                      <div
-                        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap ${
-                          isPassenger
-                            ? 'bg-orange-600 text-white rounded-br-sm'
-                            : isStaff
-                              ? 'bg-[#0B1F3A] text-white border border-emerald-500/40 rounded-bl-sm'
-                              : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm'
-                        }`}
-                      >
-                        {m.text}
-                      </div>
+                {/* Messages */}
+                <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-50/60 dark:bg-slate-950/40">
+                  {(connecting || authLoading) && displayedMessages.length === 0 && (
+                    <div className="flex items-center gap-2 text-xs text-slate-500 px-1 py-2">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
+                      চ্যাট সংযুক্ত হচ্ছে...
                     </div>
-                  );
-                })}
+                  )}
 
-                {displayedMessages.length <= 1 && !aiTyping && !connecting && (
-                  <div className="pt-1 flex flex-wrap gap-1.5">
-                    {QUICK_PROMPTS.map((q) => (
-                      <button
-                        key={q}
-                        type="button"
-                        onClick={() => handleSendText(q)}
-                        className="text-left text-[11px] px-2.5 py-1.5 rounded-xl border border-orange-200 dark:border-orange-900/50 bg-orange-50/70 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-950/60 transition-colors cursor-pointer"
+                  {chatError && (
+                    <div className="text-[11px] px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-200">
+                      {chatError}
+                    </div>
+                  )}
+
+                  {displayedMessages.map((m) => {
+                    const isPassenger = m.senderRole === 'passenger';
+                    const isStaff = m.senderRole === 'admin' || m.senderRole === 'counter_staff';
+                    return (
+                      <div
+                        key={m.id}
+                        className={`flex flex-col ${isPassenger ? 'items-end' : 'items-start'}`}
                       >
-                        {q}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                        <span className="text-[10px] font-semibold text-slate-400 mb-1 px-1 flex items-center gap-1">
+                          {isStaff && <Headset className="w-3 h-3 text-emerald-500" />}
+                          {m.senderRole === 'ai' && <Bot className="w-3 h-3 text-orange-500" />}
+                          {m.senderName}
+                          {m.senderRole === 'counter_staff' && ' (Bus Counter)'}
+                          {m.senderRole === 'admin' && ' (Admin)'}
+                          {' · '}
+                          {formatTime(m.createdAt)}
+                        </span>
+                        <div
+                          className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap ${
+                            isPassenger
+                              ? 'bg-orange-600 text-white rounded-br-sm'
+                              : isStaff
+                                ? 'bg-[#0B1F3A] text-white border border-emerald-500/40 rounded-bl-sm'
+                                : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm'
+                          }`}
+                        >
+                          {m.text}
+                        </div>
+                      </div>
+                    );
+                  })}
 
-                {aiTyping && (
-                  <div className="flex items-center gap-2 text-xs text-slate-500 px-1">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
-                    AI উত্তর লিখছে...
-                  </div>
-                )}
-                <div ref={endRef} />
-              </div>
+                  {displayedMessages.length <= 1 && !aiTyping && !connecting && (
+                    <div className="pt-1 flex flex-wrap gap-1.5">
+                      {QUICK_PROMPTS.map((q) => (
+                        <button
+                          key={q}
+                          type="button"
+                          onClick={() => handleSendText(q)}
+                          className="text-left text-[11px] px-2.5 py-1.5 rounded-xl border border-orange-200 dark:border-orange-900/50 bg-orange-50/70 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-950/60 transition-colors cursor-pointer"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
-              {/* Input */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void handleSendText(input);
-                }}
-                className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2 shrink-0"
-              >
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={
-                    session?.status === 'human_active' || session?.status === 'human_requested'
-                      ? 'Write a message to support agent...'
-                      : 'আপনার প্রশ্ন লিখুন (Bangla / English)...'
-                  }
-                  className="flex-1 h-10 px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/30"
-                />
-                <button
-                  type="submit"
-                  disabled={!input.trim() || sending}
-                  aria-label="Send message"
-                  className="w-10 h-10 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                  {aiTyping && (
+                    <div className="flex items-center gap-2 text-xs text-slate-500 px-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
+                      AI উত্তর লিখছে...
+                    </div>
+                  )}
+                  <div ref={endRef} />
+                </div>
+
+                {/* Input */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void handleSendText(input);
+                  }}
+                  className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2 shrink-0"
                 >
-                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                </button>
-              </form>
-            </>
-          )}
-        </div>
-      )}
-    </div>
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={
+                      session?.status === 'human_active' || session?.status === 'human_requested'
+                        ? 'Write a message to support agent...'
+                        : 'আপনার প্রশ্ন লিখুন (Bangla / English)...'
+                    }
+                    className="flex-1 h-10 px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!input.trim() || sending}
+                    aria-label="Send message"
+                    className="w-10 h-10 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                  >
+                    {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </button>
+                </form>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </>
   );
 }

@@ -5,8 +5,14 @@ import { Bus, Menu, X, PhoneCall, Mail, MapPin, Sun, Moon, LogOut } from 'lucide
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { fetchCompanySettings } from '../../services/firestoreService';
-import { DEFAULT_SUPPORT_PHONE, toTelHref, toWhatsAppHref } from '../../services/voiceCallService';
+import {
+  DEFAULT_SUPPORT_PHONE,
+  DEFAULT_SUPPORT_WHATSAPP,
+  toTelHref,
+  toWhatsAppHref,
+} from '../../services/voiceCallService';
 import { LiveChatWidget } from '../chat/LiveChatWidget';
+import { StaffVoiceCallBanner } from '../chat/StaffVoiceCallBanner';
 
 export function PublicLayout({ children }: { children: React.ReactNode }) {
   const { profile, logout } = useAuth();
@@ -20,6 +26,7 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
     staleTime: 60_000,
   });
   const supportPhone = settings?.supportPhone || DEFAULT_SUPPORT_PHONE;
+  const supportWhatsapp = settings?.supportWhatsapp || DEFAULT_SUPPORT_WHATSAPP;
   const supportEmail = settings?.supportEmail || 'support@deshline.com.bd';
 
   const handleLogout = async () => {
@@ -244,12 +251,12 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
                     Call Hotline
                   </a>
                   <a
-                    href={toWhatsAppHref(supportPhone, 'Hello DeshLine Support')}
+                    href={toWhatsAppHref(supportWhatsapp, 'Hello DeshLine Support')}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-semibold inline-flex items-center gap-1"
                   >
-                    WhatsApp
+                    WhatsApp ({supportWhatsapp})
                   </a>
                 </div>
               </div>
@@ -295,6 +302,7 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
         </div>
       </footer>
       <LiveChatWidget />
+      <StaffVoiceCallBanner />
     </div>
   );
 }

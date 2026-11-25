@@ -17,7 +17,7 @@ import { AdminShell } from './AdminShell';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../components/Toast';
 import { triggerStaffVoiceCallToPassenger } from '../../components/chat/StaffVoiceCallBanner';
-import { toTelHref } from '../../services/voiceCallService';
+import { toTelHref, toWhatsAppHref } from '../../services/voiceCallService';
 import {
   sendChatMessage,
   subscribeChatMessages,
@@ -361,13 +361,27 @@ export function AdminLiveChatPage() {
                       </button>
                     )}
                     {selectedSession.visitorPhone && (
-                      <a
-                        href={toTelHref(selectedSession.visitorPhone)}
-                        className="px-3 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5"
-                      >
-                        <Phone className="w-3.5 h-3.5" />
-                        Dial Phone
-                      </a>
+                      <>
+                        <a
+                          href={toWhatsAppHref(
+                            selectedSession.visitorPhone,
+                            `Hello ${selectedSession.visitorName}, DeshLine Support here.`
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5"
+                        >
+                          <PhoneCall className="w-3.5 h-3.5" />
+                          WhatsApp
+                        </a>
+                        <a
+                          href={toTelHref(selectedSession.visitorPhone)}
+                          className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold inline-flex items-center gap-1.5"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          Dial
+                        </a>
+                      </>
                     )}
                     {selectedSession.status !== 'human_active' && (
                       <button

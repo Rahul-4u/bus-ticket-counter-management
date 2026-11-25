@@ -8,7 +8,12 @@ import { PublicLayout } from '../../components/website/PublicLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../components/Toast';
 import { createSupportTicket, fetchCompanySettings, fetchCounters } from '../../services/firestoreService';
-import { DEFAULT_SUPPORT_PHONE, toTelHref, toWhatsAppHref } from '../../services/voiceCallService';
+import {
+  DEFAULT_SUPPORT_PHONE,
+  DEFAULT_SUPPORT_WHATSAPP,
+  toTelHref,
+  toWhatsAppHref,
+} from '../../services/voiceCallService';
 
 export function AboutPage() {
   return (
@@ -63,6 +68,7 @@ export function ContactPage() {
   const { data: counters = [] } = useQuery({ queryKey: ['counters'], queryFn: fetchCounters });
   const { data: settings } = useQuery({ queryKey: ['company-settings'], queryFn: fetchCompanySettings, staleTime: 60_000 });
   const supportPhone = settings?.supportPhone || DEFAULT_SUPPORT_PHONE;
+  const supportWhatsapp = settings?.supportWhatsapp || DEFAULT_SUPPORT_WHATSAPP;
   const supportEmail = settings?.supportEmail || 'support@deshline.com.bd';
 
   const {
@@ -131,12 +137,12 @@ export function ContactPage() {
                   Call Hotline Now
                 </a>
                 <a
-                  href={toWhatsAppHref(supportPhone, 'Hello DeshLine Support')}
+                  href={toWhatsAppHref(supportWhatsapp, 'Hello DeshLine Support')}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5"
                 >
-                  WhatsApp Call / Chat
+                  WhatsApp Call / Chat ({supportWhatsapp})
                 </a>
               </div>
             </div>

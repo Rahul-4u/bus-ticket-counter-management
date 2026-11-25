@@ -60,11 +60,12 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status'])
-        && data.keys().hasOnly(['uid', 'email', 'displayName', 'phone', 'role', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'phone', 'whatsappNumber', 'role', 'status', 'createdAt', 'updatedAt'])
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
         && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('whatsappNumber' in data) || (data.whatsappNumber is string && data.whatsappNumber.size() <= 32))
         && data.role in ['admin', 'owner', 'passenger', 'counter_staff']
         && data.status in ['active', 'inactive'];
     }
@@ -176,7 +177,7 @@ service cloud.firestore {
           && incoming().uid == existing().uid
           && incoming().role == existing().role
           && incoming().status == existing().status
-          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'updatedAt']))
+          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'whatsappNumber', 'updatedAt']))
       );
       allow delete: if false;
     }

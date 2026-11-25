@@ -19,6 +19,7 @@ import type {
 } from '../types/domain';
 
 export const DEFAULT_SUPPORT_PHONE = '+880 1700-000999';
+export const DEFAULT_SUPPORT_WHATSAPP = '01314052672';
 
 export function toTelHref(phone?: string): string {
   const cleaned = (phone || DEFAULT_SUPPORT_PHONE).replace(/[^+\d]/g, '');
@@ -26,10 +27,40 @@ export function toTelHref(phone?: string): string {
 }
 
 export function toWhatsAppHref(phone?: string, text?: string): string {
-  const digits = (phone || DEFAULT_SUPPORT_PHONE).replace(/[^\d]/g, '');
+  const digits = (phone || DEFAULT_SUPPORT_WHATSAPP).replace(/[^\d]/g, '');
   const normalized = digits.startsWith('0') ? `88${digits}` : digits;
-  const base = `https://wa.me/${normalized || '8801700000999'}`;
+  const base = `https://wa.me/${normalized || '8801314052672'}`;
   return text ? `${base}?text=${encodeURIComponent(text)}` : base;
+}
+
+export function showIncomingCallDesktopAlert(title: string, body: string): () => void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
+  const originalTitle = document.title;
+  let toggle = false;
+  const titleInterval = window.setInterval(() => {
+    toggle = !toggle;
+    document.title = toggle ? `📞 ${title}` : originalTitle;
+  }, 900);
+
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body, tag: 'deshline-incoming-call' });
+    }
+  } catch {
+    // Ignore Notification API restrictions
+  }
+
+  return () => {
+    window.clearInterval(titleInterval);
+    document.title = originalTitle;
+  };
+}
+
+export function requestDesktopCallNotifications(): void {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
 }
 
 const RTC_CONFIG: RTCConfiguration = {

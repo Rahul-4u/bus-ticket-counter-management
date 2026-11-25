@@ -153,17 +153,32 @@ export async function getOrCreateUserProfile(
 
 export async function updateOwnProfile(
   uid: string,
-  updates: { displayName: string; phone: string }
+  updates: { displayName: string; phone: string; whatsappNumber?: string }
 ): Promise<void> {
   const path = `users/${uid}`;
   try {
     await updateDoc(doc(db, 'users', uid), {
       displayName: updates.displayName.trim(),
       phone: updates.phone.trim(),
+      ...(typeof updates.whatsappNumber === 'string'
+        ? { whatsappNumber: updates.whatsappNumber.trim() }
+        : {}),
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateOwnWhatsappNumber(uid: string, whatsappNumber: string): Promise<void> {
+  const clean = whatsappNumber.trim().slice(0, 32);
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      whatsappNumber: clean,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
   }
 }
 

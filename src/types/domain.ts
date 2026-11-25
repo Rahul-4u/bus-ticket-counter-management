@@ -15,6 +15,7 @@ export interface UserProfile {
   email: string;
   displayName: string;
   phone?: string;
+  whatsappNumber?: string;
   role: UserRole;
   status: AccountStatus;
   createdAt?: string;
@@ -314,6 +315,7 @@ export interface CompanySettings {
   companyName: string;
   tagline: string;
   supportPhone: string;
+  supportWhatsapp?: string;
   supportEmail: string;
   headOffice: string;
   commissionPercent: number;

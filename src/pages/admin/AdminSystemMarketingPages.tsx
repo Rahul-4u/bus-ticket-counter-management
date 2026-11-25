@@ -273,6 +273,7 @@ export function AdminSettingsPage() {
     companyName: 'DeshLine Paribahan',
     tagline: 'Precision Intercity Coach Travel Across Bangladesh',
     supportPhone: '+880 1700-000999',
+    supportWhatsapp: '01314052672',
     supportEmail: 'support@deshline.com.bd',
     headOffice: '148 Mirpur Road, Dhaka',
     commissionPercent: 8,
@@ -286,7 +287,12 @@ export function AdminSettingsPage() {
   });
 
   useEffect(() => {
-    if (settings) setForm(settings);
+    if (settings) {
+      setForm({
+        ...settings,
+        supportWhatsapp: settings.supportWhatsapp || '01314052672',
+      });
+    }
   }, [settings]);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -322,10 +328,31 @@ export function AdminSettingsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold mb-1">Support Phone</label>
+              <label className="block text-xs font-semibold mb-1">Support Phone (Hotline)</label>
               <input
                 value={form.supportPhone}
                 onChange={(e) => setForm({ ...form, supportPhone: e.target.value })}
+                className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-sm font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Admin WhatsApp Number (Live Call Fallback)</label>
+              <input
+                value={form.supportWhatsapp || ''}
+                onChange={(e) => setForm({ ...form, supportWhatsapp: e.target.value })}
+                placeholder="01314052672"
+                className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-sm font-mono"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Passengers see this WhatsApp number for direct WhatsApp calls if Admin/Counter is offline from the site.
+              </p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1">Support Email</label>
+              <input
+                type="email"
+                value={form.supportEmail}
+                onChange={(e) => setForm({ ...form, supportEmail: e.target.value })}
                 className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-transparent text-sm"
               />
             </div>
