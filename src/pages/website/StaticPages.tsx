@@ -7,7 +7,8 @@ import { Mail, MapPin, PhoneCall, ShieldCheck } from 'lucide-react';
 import { PublicLayout } from '../../components/website/PublicLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../components/Toast';
-import { createSupportTicket, fetchCounters } from '../../services/firestoreService';
+import { createSupportTicket, fetchCompanySettings, fetchCounters } from '../../services/firestoreService';
+import { DEFAULT_SUPPORT_PHONE, toTelHref, toWhatsAppHref } from '../../services/voiceCallService';
 
 export function AboutPage() {
   return (
@@ -60,6 +61,9 @@ export function ContactPage() {
   const { notify } = useToast();
   const [submitted, setSubmitted] = useState(false);
   const { data: counters = [] } = useQuery({ queryKey: ['counters'], queryFn: fetchCounters });
+  const { data: settings } = useQuery({ queryKey: ['company-settings'], queryFn: fetchCompanySettings, staleTime: 60_000 });
+  const supportPhone = settings?.supportPhone || DEFAULT_SUPPORT_PHONE;
+  const supportEmail = settings?.supportEmail || 'support@deshline.com.bd';
 
   const {
     register,
@@ -104,16 +108,37 @@ export function ContactPage() {
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-4 text-sm">
               <p className="flex items-center gap-3 text-slate-800 dark:text-slate-200">
                 <PhoneCall className="w-4 h-4 text-orange-600 shrink-0" />
-                <span className="font-mono font-semibold">+880 1700-000999</span>
+                <a href={toTelHref(supportPhone)} className="font-mono font-semibold hover:text-orange-600">
+                  {supportPhone}
+                </a>
               </p>
               <p className="flex items-center gap-3 text-slate-800 dark:text-slate-200">
                 <Mail className="w-4 h-4 text-orange-600 shrink-0" />
-                <span>support@deshline.com.bd</span>
+                <a href={`mailto:${supportEmail}`} className="hover:text-orange-600">
+                  {supportEmail}
+                </a>
               </p>
               <p className="flex items-start gap-3 text-slate-800 dark:text-slate-200">
                 <MapPin className="w-4 h-4 text-orange-600 shrink-0 mt-1" />
                 <span>148 Mirpur Road, Kalyanpur Terminal, Dhaka 1207</span>
               </p>
+              <div className="pt-2 flex flex-wrap gap-2.5">
+                <a
+                  href={toTelHref(supportPhone)}
+                  className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <PhoneCall className="w-3.5 h-3.5" />
+                  Call Hotline Now
+                </a>
+                <a
+                  href={toWhatsAppHref(supportPhone, 'Hello DeshLine Support')}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  WhatsApp Call / Chat
+                </a>
+              </div>
             </div>
 
             {counters.length > 0 && (
@@ -121,9 +146,20 @@ export function ContactPage() {
                 <h2 className="text-sm font-bold text-slate-950 dark:text-white">Authorized Counters</h2>
                 <div className="divide-y divide-slate-100 dark:divide-slate-800">
                   {counters.map((c) => (
-                    <div key={c.id} className="py-2.5 text-xs">
-                      <p className="font-bold text-slate-900 dark:text-white">{c.name} ({c.cityName})</p>
-                      <p className="text-slate-500 dark:text-slate-400">{c.address} · {c.phone}</p>
+                    <div key={c.id} className="py-2.5 text-xs flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-900 dark:text-white">{c.name} ({c.cityName})</p>
+                        <p className="text-slate-500 dark:text-slate-400">{c.address} · {c.phone}</p>
+                      </div>
+                      {c.phone && (
+                        <a
+                          href={toTelHref(c.phone)}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300 font-semibold inline-flex items-center gap-1 shrink-0 hover:bg-emerald-100"
+                        >
+                          <PhoneCall className="w-3 h-3" />
+                          Call
+                        </a>
+                      )}
                     </div>
                   ))}
                 </div>

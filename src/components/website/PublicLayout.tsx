@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Bus, Menu, X, PhoneCall, Mail, MapPin, Sun, Moon, LogOut } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { fetchCompanySettings } from '../../services/firestoreService';
+import { DEFAULT_SUPPORT_PHONE, toTelHref, toWhatsAppHref } from '../../services/voiceCallService';
 import { LiveChatWidget } from '../chat/LiveChatWidget';
 
 export function PublicLayout({ children }: { children: React.ReactNode }) {
@@ -10,6 +13,14 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const { data: settings } = useQuery({
+    queryKey: ['company-settings'],
+    queryFn: fetchCompanySettings,
+    staleTime: 60_000,
+  });
+  const supportPhone = settings?.supportPhone || DEFAULT_SUPPORT_PHONE;
+  const supportEmail = settings?.supportEmail || 'support@deshline.com.bd';
 
   const handleLogout = async () => {
     await logout();
@@ -71,8 +82,17 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
             </NavLink>
           </nav>
 
-          {/* Zone 3: Theme Toggle + Auth Actions */}
+          {/* Zone 3: Direct Call + Theme Toggle + Auth Actions */}
           <div className="flex items-center gap-2.5 shrink-0">
+            <a
+              href={toTelHref(supportPhone)}
+              title={`Call 24/7 Hotline: ${supportPhone}`}
+              className="h-9 px-3 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 flex items-center gap-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+            >
+              <PhoneCall className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">Call Now</span>
+            </a>
+
             <button
               type="button"
               onClick={toggleTheme}
@@ -201,16 +221,37 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
               <div className="space-y-2 text-xs text-slate-400">
                 <p className="flex items-center gap-2">
                   <PhoneCall className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                  <span>+880 1700-000999 (24/7 Dispatch)</span>
+                  <a href={toTelHref(supportPhone)} className="hover:text-white underline-offset-2 hover:underline">
+                    {supportPhone} (24/7 Dispatch)
+                  </a>
                 </p>
                 <p className="flex items-center gap-2">
                   <Mail className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                  <span>support@deshline.com.bd</span>
+                  <a href={`mailto:${supportEmail}`} className="hover:text-white">
+                    {supportEmail}
+                  </a>
                 </p>
                 <p className="flex items-center gap-2">
                   <MapPin className="w-3.5 h-3.5 text-orange-400 shrink-0" />
                   <span>148 Mirpur Road, Kalyanpur, Dhaka 1207</span>
                 </p>
+                <div className="pt-1 flex items-center gap-2">
+                  <a
+                    href={toTelHref(supportPhone)}
+                    className="px-2.5 py-1 rounded-md bg-orange-600 hover:bg-orange-700 text-white font-semibold inline-flex items-center gap-1"
+                  >
+                    <PhoneCall className="w-3 h-3" />
+                    Call Hotline
+                  </a>
+                  <a
+                    href={toWhatsAppHref(supportPhone, 'Hello DeshLine Support')}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-semibold inline-flex items-center gap-1"
+                  >
+                    WhatsApp
+                  </a>
+                </div>
               </div>
             </div>
 

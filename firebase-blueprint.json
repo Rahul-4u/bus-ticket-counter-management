@@ -215,6 +215,7 @@
     "/settings/{settingId}": { "schema": "City", "description": "Company and cancellation policy settings" },
     "/audit_logs/{logId}": { "schema": "User", "description": "Immutable admin/system audit log" },
     "/chat_sessions/{sessionId}": { "schema": "User", "description": "Live AI and human support chat sessions" },
-    "/chat_sessions/{sessionId}/messages/{messageId}": { "schema": "User", "description": "Persistent chat messages per session" }
+    "/chat_sessions/{sessionId}/messages/{messageId}": { "schema": "User", "description": "Persistent chat messages per session" },
+    "/voice_calls/{callId}": { "schema": "User", "description": "WebRTC live voice call signaling sessions" }
   }
 }

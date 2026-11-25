@@ -498,5 +498,67 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(logId) && incoming().actorUid == request.auth.uid;
       allow update, delete: if false;
     }
+
+    // In-Browser Live WebRTC Voice Calls (Signed-in caller + Admin & Counter Staff only)
+    function isValidVoiceCall(data) {
+      return data.keys().hasAll(['id', 'callerUid', 'callerName', 'status', 'offer', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'chatSessionId', 'callerUid', 'callerName', 'callerEmail', 'callerPhone', 'calleeUid', 'calleeName', 'calleeRole', 'status', 'offer', 'answer', 'createdAt', 'updatedAt', 'endedAt'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.callerUid is string && data.callerUid.size() >= 1 && data.callerUid.size() <= 128
+        && data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 120
+        && data.status in ['ringing', 'active', 'ended', 'declined', 'missed']
+        && data.offer is map
+        && data.offer.keys().hasAll(['type', 'sdp']);
+    }
+
+    match /voice_calls/{callId} {
+      allow get: if isSignedIn() && isValidId(callId) && (
+        resource == null ||
+        isAdmin() ||
+        isCounterStaff() ||
+        existing().callerUid == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        isCounterStaff() ||
+        resource.data.callerUid == request.auth.uid
+      );
+      allow create: if isSignedIn() && isValidId(callId)
+        && isValidVoiceCall(incoming())
+        && incoming().id == callId
+        && incoming().callerUid == request.auth.uid
+        && incoming().status == 'ringing';
+      allow update: if isSignedIn() && isValidId(callId)
+        && isValidVoiceCall(incoming())
+        && incoming().id == existing().id
+        && incoming().callerUid == existing().callerUid
+        && (
+          isAdmin() ||
+          isCounterStaff() ||
+          existing().callerUid == request.auth.uid
+        );
+      allow delete: if false;
+
+      match /{candCollection}/{candId} {
+        allow get, list: if isSignedIn()
+          && candCollection in ['callerCandidates', 'calleeCandidates']
+          && (
+            isAdmin() ||
+            isCounterStaff() ||
+            (exists(/databases/$(database)/documents/voice_calls/$(callId))
+              && get(/databases/$(database)/documents/voice_calls/$(callId)).data.callerUid == request.auth.uid)
+          );
+        allow create: if isSignedIn()
+          && candCollection in ['callerCandidates', 'calleeCandidates']
+          && isValidId(callId) && isValidId(candId)
+          && exists(/databases/$(database)/documents/voice_calls/$(callId))
+          && (
+            isAdmin() ||
+            isCounterStaff() ||
+            get(/databases/$(database)/documents/voice_calls/$(callId)).data.callerUid == request.auth.uid
+          );
+        allow update, delete: if false;
+      }
+    }
   }
 }

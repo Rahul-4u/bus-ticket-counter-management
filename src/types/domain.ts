@@ -372,3 +372,36 @@ export interface ChatMessage {
   text: string;
   createdAt: string;
 }
+
+export type VoiceCallStatus = 'ringing' | 'active' | 'ended' | 'declined' | 'missed';
+
+export interface VoiceCallOfferAnswer {
+  type: string;
+  sdp: string;
+}
+
+export interface VoiceCallSession {
+  id: string;
+  chatSessionId?: string | null;
+  callerUid: string;
+  callerName: string;
+  callerEmail?: string;
+  callerPhone?: string;
+  calleeUid?: string | null;
+  calleeName?: string | null;
+  calleeRole?: 'admin' | 'counter_staff' | null;
+  status: VoiceCallStatus;
+  offer: VoiceCallOfferAnswer;
+  answer?: VoiceCallOfferAnswer | null;
+  createdAt: string;
+  updatedAt: string;
+  endedAt?: string;
+}
+
+export interface VoiceCallCandidate {
+  id: string;
+  candidate: string;
+  sdpMid: string | null;
+  sdpMLineIndex: number | null;
+  createdAt: string;
+}
