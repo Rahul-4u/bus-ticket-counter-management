@@ -34,6 +34,7 @@ import {
   AdminSupportLogsPage,
   AdminUsersPage,
 } from './pages/admin/AdminSystemMarketingPages';
+import { AdminLiveChatPage } from './pages/admin/AdminLiveChatPage';
 
 import {
   OwnerBookingsPage,
@@ -127,6 +128,7 @@ export default function App() {
                   <Route path="/admin/trips" element={<RequireRole allowedRoles={['admin']}><AdminTripsPage /></RequireRole>} />
                   <Route path="/admin/bookings" element={<RequireRole allowedRoles={['admin']}><AdminBookingsPage /></RequireRole>} />
                   <Route path="/admin/counter-pos" element={<RequireRole allowedRoles={['admin', 'counter_staff']}><AdminCounterPosPage /></RequireRole>} />
+                  <Route path="/admin/live-chat" element={<RequireRole allowedRoles={['admin', 'counter_staff']}><AdminLiveChatPage /></RequireRole>} />
                   <Route path="/admin/refunds" element={<RequireRole allowedRoles={['admin']}><AdminRefundsPage /></RequireRole>} />
                   <Route path="/admin/financials" element={<RequireRole allowedRoles={['admin']}><AdminFinancialsPage /></RequireRole>} />
                   <Route path="/admin/marketing" element={<RequireRole allowedRoles={['admin']}><AdminMarketingPage /></RequireRole>} />

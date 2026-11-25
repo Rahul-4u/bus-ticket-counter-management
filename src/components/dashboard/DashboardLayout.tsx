@@ -50,9 +50,10 @@ export function DashboardLayout({ portalTitle, roleLabel, groups, children }: Da
   const [quickSearch, setQuickSearch] = useState('');
 
   const { data: notifications = [] } = useQuery({
-    queryKey: ['notifications', profile?.uid],
-    queryFn: () => fetchUserNotifications(profile!.uid),
+    queryKey: ['notifications', profile?.uid, profile?.role],
+    queryFn: () => fetchUserNotifications(profile!.uid, profile?.role),
     enabled: Boolean(profile?.uid),
+    refetchInterval: profile?.role === 'admin' || profile?.role === 'counter_staff' ? 15_000 : false,
   });
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
@@ -62,9 +63,13 @@ export function DashboardLayout({ portalTitle, roleLabel, groups, children }: Da
     .filter(Boolean)
     .map((seg) => seg.replace(/-/g, ' '));
 
-  const handleMarkRead = async (id: string) => {
+  const handleMarkRead = async (id: string, title?: string) => {
     await markNotificationRead(id);
-    queryClient.invalidateQueries({ queryKey: ['notifications', profile?.uid] });
+    queryClient.invalidateQueries({ queryKey: ['notifications', profile?.uid, profile?.role] });
+    if (title?.startsWith('Live Support Request:') && (profile?.role === 'admin' || profile?.role === 'counter_staff')) {
+      setNotifOpen(false);
+      navigate('/admin/live-chat');
+    }
   };
 
   const handleQuickSearch = (e: React.FormEvent) => {
@@ -251,7 +256,7 @@ export function DashboardLayout({ portalTitle, roleLabel, groups, children }: Da
                         <button
                           key={n.id}
                           type="button"
-                          onClick={() => handleMarkRead(n.id)}
+                          onClick={() => handleMarkRead(n.id, n.title)}
                           className="w-full text-left py-2.5 px-1 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-lg cursor-pointer"
                         >
                           <p className={`text-xs font-semibold ${n.isRead ? 'text-slate-600 dark:text-slate-400' : 'text-slate-950 dark:text-white'}`}>

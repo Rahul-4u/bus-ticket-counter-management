@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   MapPinned,
   Megaphone,
+  MessageSquareText,
   Receipt,
   RotateCcw,
   Settings,
@@ -16,6 +17,7 @@ import {
   Users,
 } from 'lucide-react';
 import { DashboardLayout, SidebarGroup } from '../../components/dashboard/DashboardLayout';
+import { useAuth } from '../../contexts/AuthContext';
 
 const ADMIN_GROUPS: SidebarGroup[] = [
   {
@@ -37,6 +39,7 @@ const ADMIN_GROUPS: SidebarGroup[] = [
     items: [
       { label: 'All Bookings', to: '/admin/bookings', icon: Ticket },
       { label: 'Counter Booking POS', to: '/admin/counter-pos', icon: Receipt },
+      { label: 'Live Passenger Chat', to: '/admin/live-chat', icon: MessageSquareText },
       { label: 'Refund Requests', to: '/admin/refunds', icon: RotateCcw },
       { label: 'Verify Ticket', to: '/track', icon: ShieldCheck },
     ],
@@ -58,9 +61,27 @@ const ADMIN_GROUPS: SidebarGroup[] = [
   },
 ];
 
+const COUNTER_STAFF_GROUPS: SidebarGroup[] = [
+  {
+    title: 'Counter Desk',
+    items: [
+      { label: 'Counter Booking POS', to: '/admin/counter-pos', icon: Receipt },
+      { label: 'Live Passenger Chat', to: '/admin/live-chat', icon: MessageSquareText },
+      { label: 'Verify Ticket', to: '/track', icon: ShieldCheck },
+    ],
+  },
+];
+
 export function AdminShell({ children }: { children: React.ReactNode }) {
+  const { profile } = useAuth();
+  const isCounter = profile?.role === 'counter_staff';
+
   return (
-    <DashboardLayout portalTitle="Operations Console" roleLabel="Admin" groups={ADMIN_GROUPS}>
+    <DashboardLayout
+      portalTitle={isCounter ? 'Counter Desk Console' : 'Operations Console'}
+      roleLabel={isCounter ? 'Counter Staff' : 'Admin'}
+      groups={isCounter ? COUNTER_STAFF_GROUPS : ADMIN_GROUPS}
+    >
       {children}
     </DashboardLayout>
   );

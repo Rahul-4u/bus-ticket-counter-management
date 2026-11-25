@@ -336,3 +336,39 @@ export interface AuditLog {
   details: string;
   createdAt: string;
 }
+
+export type ChatSessionStatus = 'ai_active' | 'human_requested' | 'human_active' | 'resolved';
+export type ChatSenderRole = 'passenger' | 'ai' | 'admin' | 'counter_staff';
+
+export interface ChatSession {
+  id: string;
+  visitorToken: string;
+  userId?: string | null;
+  visitorName: string;
+  visitorEmail?: string;
+  visitorPhone?: string;
+  status: ChatSessionStatus;
+  humanRequested: boolean;
+  humanRequestedAt?: string;
+  assignedAgentUid?: string | null;
+  assignedAgentName?: string | null;
+  assignedAgentRole?: 'admin' | 'counter_staff' | null;
+  lastMessage: string;
+  lastSenderRole: ChatSenderRole;
+  unreadForStaff: number;
+  unreadForPassenger: number;
+  emailNotificationStatus?: 'none' | 'sent' | 'logged' | 'failed';
+  emailNotificationNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sessionId: string;
+  senderRole: ChatSenderRole;
+  senderName: string;
+  senderUid?: string | null;
+  text: string;
+  createdAt: string;
+}

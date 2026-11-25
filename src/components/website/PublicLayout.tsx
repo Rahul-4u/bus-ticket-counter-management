@@ -3,6 +3,7 @@ import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { Bus, Menu, X, PhoneCall, Mail, MapPin, Sun, Moon, LogOut } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { LiveChatWidget } from '../chat/LiveChatWidget';
 
 export function PublicLayout({ children }: { children: React.ReactNode }) {
   const { profile, logout } = useAuth();
@@ -252,6 +253,7 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </footer>
+      <LiveChatWidget />
     </div>
   );
 }

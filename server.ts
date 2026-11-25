@@ -6,6 +6,11 @@ import dotenv from 'dotenv';
 import { initializeApp, getApps, getApp } from 'firebase-admin/app';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import firebaseConfig from './firebase-applet-config.json';
+import {
+  generateAiSupportReply,
+  sendHumanSupportEmailNotification,
+  type ChatHistoryTurn,
+} from './api/_lib/chatBackend';
 
 dotenv.config();
 
@@ -70,6 +75,64 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', service: 'DeshLine Paribahan API' });
+  });
+
+  app.post('/api/chat/ai', async (req: Request, res: Response) => {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    if (!message || message.length > 4000) {
+      res.status(400).json({ error: 'Message is required and must be under 4000 characters' });
+      return;
+    }
+
+    const history = Array.isArray(body.history)
+      ? (body.history.filter(
+          (item): item is ChatHistoryTurn =>
+            Boolean(item) &&
+            typeof item === 'object' &&
+            typeof (item as ChatHistoryTurn).text === 'string' &&
+            ['passenger', 'ai', 'admin', 'counter_staff'].includes((item as ChatHistoryTurn).senderRole)
+        ) as ChatHistoryTurn[])
+      : [];
+
+    const result = await generateAiSupportReply({
+      message,
+      history,
+      visitorName: typeof body.visitorName === 'string' ? body.visitorName.slice(0, 120) : undefined,
+      routeSummary: typeof body.routeSummary === 'string' ? body.routeSummary.slice(0, 1500) : undefined,
+    });
+    res.json(result);
+  });
+
+  app.post('/api/chat/notify-human', async (req: Request, res: Response) => {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
+    const visitorName = typeof body.visitorName === 'string' ? body.visitorName.trim() : 'Passenger Guest';
+    const lastMessage = typeof body.lastMessage === 'string' ? body.lastMessage.trim() : '';
+
+    if (!sessionId || !lastMessage) {
+      res.status(400).json({ error: 'sessionId and lastMessage are required' });
+      return;
+    }
+
+    const transcript = Array.isArray(body.transcript)
+      ? body.transcript.filter(
+          (t): t is { senderRole: string; senderName: string; text: string } =>
+            Boolean(t) &&
+            typeof t === 'object' &&
+            typeof (t as { text?: unknown }).text === 'string'
+        )
+      : [];
+
+    const result = await sendHumanSupportEmailNotification({
+      sessionId,
+      visitorName: visitorName.slice(0, 120),
+      visitorEmail: typeof body.visitorEmail === 'string' ? body.visitorEmail.slice(0, 200) : undefined,
+      visitorPhone: typeof body.visitorPhone === 'string' ? body.visitorPhone.slice(0, 32) : undefined,
+      lastMessage: lastMessage.slice(0, 2000),
+      transcript,
+    });
+    res.json(result);
   });
 
   /**

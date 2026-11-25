@@ -719,11 +719,19 @@ export async function submitTripReview(review: Omit<Review, 'id' | 'createdAt' |
 }
 
 // Notifications & Support Tickets
-export async function fetchUserNotifications(uid: string): Promise<AppNotification[]> {
+export async function fetchUserNotifications(uid: string, role?: UserRole): Promise<AppNotification[]> {
   try {
     const q = query(collection(db, 'notifications'), where('targetUid', '==', uid));
     const snap = await getDocs(q);
-    return snap.docs.map((d) => d.data() as AppNotification).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const list = snap.docs.map((d) => d.data() as AppNotification);
+
+    if (role === 'admin' || role === 'counter_staff') {
+      const broadcastQ = query(collection(db, 'notifications'), where('targetUid', '==', 'staff_broadcast'));
+      const broadcastSnap = await getDocs(broadcastQ);
+      broadcastSnap.docs.forEach((d) => list.push(d.data() as AppNotification));
+    }
+
+    return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'notifications');
   }

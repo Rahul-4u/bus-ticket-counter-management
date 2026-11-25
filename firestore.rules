@@ -381,11 +381,98 @@ service cloud.firestore {
 
     // Notifications
     match /notifications/{notificationId} {
-      allow get: if isSignedIn() && (existing().targetUid == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (resource.data.targetUid == request.auth.uid || isBootstrapAdminEmail());
-      allow create: if isSignedIn() && isValidId(notificationId);
-      allow update: if isSignedIn() && isValidId(notificationId) && (existing().targetUid == request.auth.uid || isAdmin());
+      allow get: if isSignedIn() && (
+        existing().targetUid == request.auth.uid ||
+        isAdmin() ||
+        (existing().targetUid == 'staff_broadcast' && isCounterStaff())
+      );
+      allow list: if isSignedIn() && (
+        resource.data.targetUid == request.auth.uid ||
+        isAdmin() ||
+        (resource.data.targetUid == 'staff_broadcast' && isCounterStaff())
+      );
+      allow create: if isValidId(notificationId)
+        && incoming().keys().hasAll(['id', 'targetUid', 'targetRole', 'title', 'message', 'type', 'isRead', 'createdAt'])
+        && (isSignedIn() || incoming().targetUid == 'staff_broadcast');
+      allow update: if isSignedIn() && isValidId(notificationId) && (
+        existing().targetUid == request.auth.uid ||
+        isAdmin() ||
+        (existing().targetUid == 'staff_broadcast' && isCounterStaff())
+      );
       allow delete: if isAdmin() && isValidId(notificationId);
+    }
+
+    // Live AI & Human Support Chat Sessions (Visible only to passenger owner + Admin + Counter Staff)
+    function isValidChatSession(data) {
+      return data.keys().hasAll(['id', 'visitorToken', 'visitorName', 'status', 'humanRequested', 'lastMessage', 'lastSenderRole', 'unreadForStaff', 'unreadForPassenger', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'visitorToken', 'userId', 'visitorName', 'visitorEmail', 'visitorPhone', 'status', 'humanRequested', 'humanRequestedAt', 'assignedAgentUid', 'assignedAgentName', 'assignedAgentRole', 'lastMessage', 'lastSenderRole', 'unreadForStaff', 'unreadForPassenger', 'emailNotificationStatus', 'emailNotificationNote', 'createdAt', 'updatedAt'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.visitorToken is string && data.visitorToken.size() >= 16 && data.visitorToken.size() <= 128
+        && (!('userId' in data) || data.userId == null || (data.userId is string && data.userId.size() <= 128))
+        && data.visitorName is string && data.visitorName.size() >= 1 && data.visitorName.size() <= 120
+        && (!('visitorEmail' in data) || (data.visitorEmail is string && data.visitorEmail.size() <= 200))
+        && (!('visitorPhone' in data) || (data.visitorPhone is string && data.visitorPhone.size() <= 32))
+        && data.status in ['ai_active', 'human_requested', 'human_active', 'resolved']
+        && data.humanRequested is bool
+        && data.lastMessage is string && data.lastMessage.size() <= 1000
+        && data.lastSenderRole in ['passenger', 'ai', 'admin', 'counter_staff']
+        && data.unreadForStaff is int && data.unreadForStaff >= 0
+        && data.unreadForPassenger is int && data.unreadForPassenger >= 0;
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasAll(['id', 'sessionId', 'senderRole', 'senderName', 'text', 'createdAt'])
+        && data.keys().hasOnly(['id', 'sessionId', 'senderRole', 'senderName', 'senderUid', 'text', 'createdAt'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.sessionId is string && data.sessionId.size() >= 1 && data.sessionId.size() <= 128
+        && data.senderRole in ['passenger', 'ai', 'admin', 'counter_staff']
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 120
+        && (!('senderUid' in data) || data.senderUid == null || (data.senderUid is string && data.senderUid.size() <= 128))
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 4000;
+    }
+
+    match /chat_sessions/{sessionId} {
+      allow get: if isAdmin() || isCounterStaff()
+        || (isSignedIn() && existing().userId == request.auth.uid)
+        || (isValidId(sessionId) && existing().userId == null);
+      allow list: if isAdmin() || isCounterStaff()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(sessionId)
+        && isValidChatSession(incoming())
+        && incoming().id == sessionId
+        && incoming().status in ['ai_active', 'human_requested']
+        && (incoming().userId == null || (isSignedIn() && incoming().userId == request.auth.uid));
+      allow update: if isValidId(sessionId)
+        && isValidChatSession(incoming())
+        && incoming().id == existing().id
+        && incoming().visitorToken == existing().visitorToken
+        && (
+          isAdmin() || isCounterStaff() || (
+            (existing().userId == null || (isSignedIn() && existing().userId == request.auth.uid))
+            && incoming().assignedAgentUid == existing().assignedAgentUid
+          )
+        );
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get, list: if isAdmin() || isCounterStaff()
+          || (isSignedIn() && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid)
+          || (isValidId(sessionId) && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == null);
+        allow create: if isValidId(sessionId) && isValidId(messageId)
+          && isValidChatMessage(incoming())
+          && incoming().id == messageId
+          && incoming().sessionId == sessionId
+          && (
+            isAdmin() || isCounterStaff() || (
+              incoming().senderRole in ['passenger', 'ai']
+              && (
+                get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == null
+                || (isSignedIn() && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid)
+              )
+            )
+          );
+        allow update, delete: if false;
+      }
     }
 
     // Support Tickets
