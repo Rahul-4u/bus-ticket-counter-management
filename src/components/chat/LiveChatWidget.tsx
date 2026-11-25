@@ -1,14 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Bot,
   Headset,
   Loader2,
+  LogIn,
   MailCheck,
   MessageCircle,
   Plus,
   Send,
+  ShieldCheck,
   Sparkles,
   UserCheck,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -44,7 +48,9 @@ function formatTime(iso: string): string {
 }
 
 export function LiveChatWidget() {
-  const { profile } = useAuth();
+  const { profile, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -54,29 +60,33 @@ export function LiveChatWidget() {
   const [chatError, setChatError] = useState('');
   const [localFallbackMsgs, setLocalFallbackMsgs] = useState<ChatMessage[]>([]);
   const [aiTyping, setAiTyping] = useState(false);
-  const [showContactForm, setShowContactForm] = useState(false);
-  const [guestName, setGuestName] = useState('');
-  const [guestPhone, setGuestPhone] = useState('');
-  const [guestEmail, setGuestEmail] = useState('');
   const [routeSummary, setRouteSummary] = useState('');
   const [sessionId, setSessionId] = useState<string>('');
   const [visitorToken, setVisitorToken] = useState<string>('');
   const endRef = useRef<HTMLDivElement | null>(null);
 
-  // Initialize chat identity (reuse signed-in user's latest session if available, else localStorage)
+  // Reset state whenever user logs out
   useEffect(() => {
+    if (!profile?.uid) {
+      setSession(null);
+      setMessages([]);
+      setLocalFallbackMsgs([]);
+      setSessionId('');
+      setVisitorToken('');
+      setChatError('');
+      return;
+    }
+
     let active = true;
+    const uid = profile.uid;
     async function initIdentity() {
-      const local = getOrCreateLocalChatIdentity(profile?.uid);
-      if (profile?.uid) {
-        const existing = await findLatestUserChatSession(profile.uid);
-        if (active && existing) {
-          setSessionId(existing.id);
-          setVisitorToken(existing.visitorToken);
-          return;
-        }
-      }
-      if (active) {
+      const local = getOrCreateLocalChatIdentity(uid);
+      const existing = await findLatestUserChatSession(uid);
+      if (!active) return;
+      if (existing) {
+        setSessionId(existing.id);
+        setVisitorToken(existing.visitorToken);
+      } else {
         setSessionId(local.sessionId);
         setVisitorToken(local.visitorToken);
       }
@@ -87,9 +97,9 @@ export function LiveChatWidget() {
     };
   }, [profile?.uid]);
 
-  // Load route summary once when widget opens for richer AI answers
+  // Load route summary once when signed-in user opens widget
   useEffect(() => {
-    if (!open || routeSummary) return;
+    if (!open || !profile?.uid || routeSummary) return;
     fetchRoutes()
       .then((routes) => {
         if (!routes.length) return;
@@ -101,13 +111,14 @@ export function LiveChatWidget() {
         setRouteSummary(summary);
       })
       .catch(() => {});
-  }, [open, routeSummary]);
+  }, [open, profile?.uid, routeSummary]);
 
-  // Ensure Firestore session exists and subscribe in real-time when widget is opened (or session already initialized)
+  // Connect to Firestore session only for signed-in users
   useEffect(() => {
-    if (!sessionId || !visitorToken) return;
+    if (!profile?.uid || !sessionId || !visitorToken) return;
     if (!open && !session) return;
 
+    const currentProfile = profile;
     let unsubSession: (() => void) | undefined;
     let unsubMessages: (() => void) | undefined;
     let cancelled = false;
@@ -115,14 +126,13 @@ export function LiveChatWidget() {
     async function connect() {
       setConnecting(true);
       setChatError('');
-      const initialName = profile?.displayName || guestName.trim() || 'Passenger Guest';
       const ensured = await ensureChatSession({
         sessionId,
         visitorToken,
-        userId: profile?.uid ?? null,
-        visitorName: initialName,
-        visitorEmail: profile?.email || guestEmail.trim() || undefined,
-        visitorPhone: profile?.phone || guestPhone.trim() || undefined,
+        userId: currentProfile.uid,
+        visitorName: currentProfile.displayName || currentProfile.email.split('@')[0] || 'Passenger',
+        visitorEmail: currentProfile.email || undefined,
+        visitorPhone: currentProfile.phone || undefined,
       });
       if (cancelled) return;
       setSession(ensured);
@@ -149,7 +159,7 @@ export function LiveChatWidget() {
       unsubSession?.();
       unsubMessages?.();
     };
-  }, [open, sessionId, visitorToken, profile?.uid]);
+  }, [open, profile?.uid, sessionId, visitorToken]);
 
   // Clear passenger unread counter when opened
   useEffect(() => {
@@ -163,11 +173,17 @@ export function LiveChatWidget() {
     if (open) {
       endRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages.length, aiTyping, open]);
+  }, [messages.length, localFallbackMsgs.length, aiTyping, open]);
 
-  const unreadCount = session?.unreadForPassenger || 0;
+  const unreadCount = profile ? session?.unreadForPassenger || 0 : 0;
 
   const statusMeta = useMemo(() => {
+    if (!profile) {
+      return {
+        label: 'Sign in required for Live Support',
+        dot: 'bg-amber-400',
+      };
+    }
     switch (session?.status) {
       case 'human_requested':
         return {
@@ -190,12 +206,13 @@ export function LiveChatWidget() {
           dot: 'bg-emerald-400',
         };
     }
-  }, [session?.status, session?.assignedAgentName]);
+  }, [profile, session?.status, session?.assignedAgentName]);
 
   const escalateToHuman = async (triggerMessage: string, currentSession: ChatSession) => {
-    const cleanName = profile?.displayName || guestName.trim() || currentSession.visitorName || 'Passenger Guest';
-    const cleanEmail = profile?.email || guestEmail.trim() || currentSession.visitorEmail || '';
-    const cleanPhone = profile?.phone || guestPhone.trim() || currentSession.visitorPhone || '';
+    if (!profile) return;
+    const cleanName = profile.displayName || currentSession.visitorName || 'Passenger';
+    const cleanEmail = profile.email || currentSession.visitorEmail || '';
+    const cleanPhone = profile.phone || currentSession.visitorPhone || '';
 
     const handoffText =
       'আপনার অনুরোধটি আমাদের Admin এবং Bus Counter Support টিমের কাছে পাঠানো হয়েছে এবং সাইটের অফিশিয়াল মেইলে নোটিফিকেশন পাঠানো হয়েছে। অনুগ্রহ করে একটু অপেক্ষা করুন—কিছুক্ষণের মধ্যেই আমাদের একজন প্রতিনিধি এই চ্যাটে সরাসরি যুক্ত হবেন।';
@@ -252,19 +269,19 @@ export function LiveChatWidget() {
 
   const handleSendText = async (rawText: string) => {
     const text = rawText.trim();
-    if (!text || sending || !sessionId || !visitorToken) return;
+    if (!profile || !text || sending || !sessionId || !visitorToken) return;
 
     setSending(true);
     setInput('');
     setChatError('');
 
-    const passengerName = profile?.displayName || guestName.trim() || session?.visitorName || 'Passenger Guest';
+    const passengerName = profile.displayName || profile.email.split('@')[0] || 'Passenger';
     const optimisticUserMsg: ChatMessage = {
       id: `local_${Date.now()}_u`,
       sessionId,
       senderRole: 'passenger',
       senderName: passengerName,
-      senderUid: profile?.uid ?? null,
+      senderUid: profile.uid,
       text,
       createdAt: new Date().toISOString(),
     };
@@ -275,10 +292,10 @@ export function LiveChatWidget() {
         (await ensureChatSession({
           sessionId,
           visitorToken,
-          userId: profile?.uid ?? null,
+          userId: profile.uid,
           visitorName: passengerName,
-          visitorEmail: profile?.email || guestEmail.trim() || undefined,
-          visitorPhone: profile?.phone || guestPhone.trim() || undefined,
+          visitorEmail: profile.email || undefined,
+          visitorPhone: profile.phone || undefined,
         }));
       if (!session) setSession(activeSession);
 
@@ -288,21 +305,16 @@ export function LiveChatWidget() {
         session: activeSession,
         senderRole: 'passenger',
         senderName: passengerName,
-        senderUid: profile?.uid ?? null,
+        senderUid: profile.uid,
         text,
         nextStatus: activeSession.status === 'resolved' ? 'ai_active' : undefined,
         visitorDetails: {
           visitorName: passengerName,
-          ...(profile?.email || guestEmail.trim()
-            ? { visitorEmail: profile?.email || guestEmail.trim() }
-            : {}),
-          ...(profile?.phone || guestPhone.trim()
-            ? { visitorPhone: profile?.phone || guestPhone.trim() }
-            : {}),
+          ...(profile.email ? { visitorEmail: profile.email } : {}),
+          ...(profile.phone ? { visitorPhone: profile.phone } : {}),
         },
       });
 
-      // If a human agent is already requested or active, do not run AI auto-reply
       if (nextStatus === 'human_requested' || nextStatus === 'human_active') {
         return;
       }
@@ -333,7 +345,6 @@ export function LiveChatWidget() {
       }
     } catch (err) {
       console.error('Chat send error:', err);
-      // Fallback: show passenger message & AI reply locally so chat never appears blank
       setLocalFallbackMsgs((prev) => [...prev, optimisticUserMsg]);
       try {
         setAiTyping(true);
@@ -368,18 +379,14 @@ export function LiveChatWidget() {
   };
 
   const handleManualHumanClick = async () => {
-    if (!session || sending) return;
-    if (!profile && !guestPhone.trim() && !guestEmail.trim() && !session.visitorPhone && !session.visitorEmail) {
-      setShowContactForm(true);
-      return;
-    }
+    if (!profile || !session || sending) return;
     setSending(true);
     try {
       await sendChatMessage({
         session,
         senderRole: 'passenger',
-        senderName: profile?.displayName || guestName.trim() || session.visitorName,
-        senderUid: profile?.uid ?? null,
+        senderName: profile.displayName || session.visitorName,
+        senderUid: profile.uid,
         text: 'আমি সরাসরি মানুষের (Admin / Counter Staff) সাথে কথা বলতে চাই।',
       });
       await escalateToHuman('Passenger clicked Talk to Human button', session);
@@ -388,41 +395,11 @@ export function LiveChatWidget() {
     }
   };
 
-  const handleSaveGuestContactAndEscalate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!session) return;
-    setShowContactForm(false);
-    setSending(true);
-    try {
-      const updatedName = guestName.trim() || session.visitorName;
-      const updatedSession: ChatSession = {
-        ...session,
-        visitorName: updatedName,
-        visitorPhone: guestPhone.trim() || session.visitorPhone,
-        visitorEmail: guestEmail.trim() || session.visitorEmail,
-      };
-      await updateChatSessionMeta(session.id, {
-        visitorName: updatedName,
-        ...(guestPhone.trim() ? { visitorPhone: guestPhone.trim() } : {}),
-        ...(guestEmail.trim() ? { visitorEmail: guestEmail.trim() } : {}),
-      });
-      await sendChatMessage({
-        session: updatedSession,
-        senderRole: 'passenger',
-        senderName: updatedName,
-        senderUid: profile?.uid ?? null,
-        text: `আমার মানুষের সাহায্য লাগবে। নাম: ${updatedName}${guestPhone.trim() ? `, ফোন: ${guestPhone.trim()}` : ''}`,
-      });
-      await escalateToHuman('Passenger requested human support with contact details', updatedSession);
-    } finally {
-      setSending(false);
-    }
-  };
-
   const displayedMessages = messages.length > 0 ? messages : localFallbackMsgs;
 
   const handleStartNewChat = async () => {
-    const fresh = resetLocalChatIdentity(profile?.uid);
+    if (!profile) return;
+    const fresh = resetLocalChatIdentity(profile.uid);
     setMessages([]);
     setLocalFallbackMsgs([]);
     setChatError('');
@@ -477,14 +454,16 @@ export function LiveChatWidget() {
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={handleStartNewChat}
-                title="Start New Chat"
-                className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
+              {profile && (
+                <button
+                  type="button"
+                  onClick={handleStartNewChat}
+                  title="Start New Chat"
+                  className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setOpen(false)}
@@ -496,186 +475,178 @@ export function LiveChatWidget() {
             </div>
           </div>
 
-          {/* Human Escalation Banner */}
-          <div className="px-3.5 py-2 bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
-            {session?.status === 'human_requested' ? (
-              <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium flex items-center gap-1.5">
-                <MailCheck className="w-3.5 h-3.5 shrink-0" />
-                Counter &amp; Admin notified — waiting for agent
-              </span>
-            ) : session?.status === 'human_active' ? (
-              <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5 shrink-0" />
-                Live human chat active ({session.assignedAgentName || 'Support'})
-              </span>
-            ) : (
-              <>
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5 text-orange-500" />
-                  Bangla &amp; English AI Support
-                </span>
+          {!authLoading && !profile ? (
+            <div className="flex-1 p-6 flex flex-col items-center justify-center text-center bg-slate-50/70 dark:bg-slate-950/40 space-y-5">
+              <div className="w-14 h-14 rounded-2xl bg-orange-100 dark:bg-orange-950/50 text-orange-600 dark:text-orange-400 flex items-center justify-center">
+                <ShieldCheck className="w-7 h-7" />
+              </div>
+              <div className="space-y-2 max-w-xs">
+                <h3 className="text-base font-extrabold text-slate-950 dark:text-white font-display">
+                  লগইন বা সাইন-আপ প্রয়োজন
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  লাইভ AI এবং Bus Counter সাপোর্টে চ্যাট করতে অনুগ্রহ করে আগে Sign In অথবা নতুন অ্যাকাউন্ট তৈরি (Sign Up) করুন। আপনার সব চ্যাট আপনার অ্যাকাউন্টে নিরাপদে সংরক্ষিত থাকবে।
+                </p>
+              </div>
+              <div className="w-full max-w-xs space-y-2.5">
                 <button
                   type="button"
-                  onClick={handleManualHumanClick}
-                  disabled={sending}
-                  className="px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                  onClick={() => {
+                    setOpen(false);
+                    navigate('/login');
+                  }}
+                  className="w-full h-10 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
-                  <Headset className="w-3 h-3" />
-                  Talk to Human
+                  <LogIn className="w-4 h-4" />
+                  Sign In to Chat
                 </button>
-              </>
-            )}
-          </div>
-
-          {/* Optional Guest Info Capture Form on Human Request */}
-          {showContactForm && (
-            <form
-              onSubmit={handleSaveGuestContactAndEscalate}
-              className="p-3.5 bg-orange-50/90 dark:bg-orange-950/30 border-b border-orange-200 dark:border-orange-900/50 space-y-2 shrink-0"
-            >
-              <p className="text-xs font-semibold text-slate-900 dark:text-white">
-                আপনার নাম ও ফোন/ইমেইল দিন যাতে Counter Staff যোগাযোগ করতে পারেন:
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  required
-                  placeholder="আপনার নাম"
-                  value={guestName}
-                  onChange={(e) => setGuestName(e.target.value)}
-                  className="h-8 px-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-                />
-                <input
-                  required
-                  placeholder="ফোন (017...)"
-                  value={guestPhone}
-                  onChange={(e) => setGuestPhone(e.target.value)}
-                  className="h-8 px-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    navigate('/register');
+                  }}
+                  className="w-full h-10 rounded-xl bg-[#0B1F3A] hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4 text-orange-400" />
+                  Create Account (Sign Up)
+                </button>
               </div>
-              <input
-                type="email"
-                placeholder="ইমেইল (ঐচ্ছিক)"
-                value={guestEmail}
-                onChange={(e) => setGuestEmail(e.target.value)}
-                className="w-full h-8 px-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
-              />
-              <div className="flex gap-2">
+            </div>
+          ) : (
+            <>
+              {/* Human Escalation Banner */}
+              <div className="px-3.5 py-2 bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 shrink-0">
+                {session?.status === 'human_requested' ? (
+                  <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium flex items-center gap-1.5">
+                    <MailCheck className="w-3.5 h-3.5 shrink-0" />
+                    Counter &amp; Admin notified — waiting for agent
+                  </span>
+                ) : session?.status === 'human_active' ? (
+                  <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                    Live human chat active ({session.assignedAgentName || 'Support'})
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1 truncate">
+                      <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                      {profile?.displayName}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleManualHumanClick}
+                      disabled={sending || !session}
+                      className="px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <Headset className="w-3 h-3" />
+                      Talk to Human
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-50/60 dark:bg-slate-950/40">
+                {(connecting || authLoading) && displayedMessages.length === 0 && (
+                  <div className="flex items-center gap-2 text-xs text-slate-500 px-1 py-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
+                    চ্যাট সংযুক্ত হচ্ছে...
+                  </div>
+                )}
+
+                {chatError && (
+                  <div className="text-[11px] px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-200">
+                    {chatError}
+                  </div>
+                )}
+
+                {displayedMessages.map((m) => {
+                  const isPassenger = m.senderRole === 'passenger';
+                  const isStaff = m.senderRole === 'admin' || m.senderRole === 'counter_staff';
+                  return (
+                    <div
+                      key={m.id}
+                      className={`flex flex-col ${isPassenger ? 'items-end' : 'items-start'}`}
+                    >
+                      <span className="text-[10px] font-semibold text-slate-400 mb-1 px-1 flex items-center gap-1">
+                        {isStaff && <Headset className="w-3 h-3 text-emerald-500" />}
+                        {m.senderRole === 'ai' && <Bot className="w-3 h-3 text-orange-500" />}
+                        {m.senderName}
+                        {m.senderRole === 'counter_staff' && ' (Bus Counter)'}
+                        {m.senderRole === 'admin' && ' (Admin)'}
+                        {' · '}
+                        {formatTime(m.createdAt)}
+                      </span>
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap ${
+                          isPassenger
+                            ? 'bg-orange-600 text-white rounded-br-sm'
+                            : isStaff
+                              ? 'bg-[#0B1F3A] text-white border border-emerald-500/40 rounded-bl-sm'
+                              : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm'
+                        }`}
+                      >
+                        {m.text}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {displayedMessages.length <= 1 && !aiTyping && !connecting && (
+                  <div className="pt-1 flex flex-wrap gap-1.5">
+                    {QUICK_PROMPTS.map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        onClick={() => handleSendText(q)}
+                        className="text-left text-[11px] px-2.5 py-1.5 rounded-xl border border-orange-200 dark:border-orange-900/50 bg-orange-50/70 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-950/60 transition-colors cursor-pointer"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {aiTyping && (
+                  <div className="flex items-center gap-2 text-xs text-slate-500 px-1">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
+                    AI উত্তর লিখছে...
+                  </div>
+                )}
+                <div ref={endRef} />
+              </div>
+
+              {/* Input */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void handleSendText(input);
+                }}
+                className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2 shrink-0"
+              >
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder={
+                    session?.status === 'human_active' || session?.status === 'human_requested'
+                      ? 'Write a message to support agent...'
+                      : 'আপনার প্রশ্ন লিখুন (Bangla / English)...'
+                  }
+                  className="flex-1 h-10 px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/30"
+                />
                 <button
                   type="submit"
-                  className="flex-1 h-8 rounded-lg bg-orange-600 text-white text-xs font-semibold cursor-pointer"
+                  disabled={!input.trim() || sending}
+                  aria-label="Send message"
+                  className="w-10 h-10 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
                 >
-                  Connect to Human Agent
+                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setShowContactForm(false)}
-                  className="px-3 h-8 rounded-lg border border-slate-300 dark:border-slate-700 text-xs cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
+              </form>
+            </>
           )}
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-50/60 dark:bg-slate-950/40">
-            {connecting && displayedMessages.length === 0 && (
-              <div className="flex items-center gap-2 text-xs text-slate-500 px-1 py-2">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
-                চ্যাট সংযুক্ত হচ্ছে...
-              </div>
-            )}
-
-            {chatError && (
-              <div className="text-[11px] px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-200">
-                {chatError}
-              </div>
-            )}
-
-            {displayedMessages.map((m) => {
-              const isPassenger = m.senderRole === 'passenger';
-              const isStaff = m.senderRole === 'admin' || m.senderRole === 'counter_staff';
-              return (
-                <div
-                  key={m.id}
-                  className={`flex flex-col ${isPassenger ? 'items-end' : 'items-start'}`}
-                >
-                  <span className="text-[10px] font-semibold text-slate-400 mb-1 px-1 flex items-center gap-1">
-                    {isStaff && <Headset className="w-3 h-3 text-emerald-500" />}
-                    {m.senderRole === 'ai' && <Bot className="w-3 h-3 text-orange-500" />}
-                    {m.senderName}
-                    {m.senderRole === 'counter_staff' && ' (Bus Counter)'}
-                    {m.senderRole === 'admin' && ' (Admin)'}
-                    {' · '}
-                    {formatTime(m.createdAt)}
-                  </span>
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap ${
-                      isPassenger
-                        ? 'bg-orange-600 text-white rounded-br-sm'
-                        : isStaff
-                          ? 'bg-[#0B1F3A] text-white border border-emerald-500/40 rounded-bl-sm'
-                          : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm'
-                    }`}
-                  >
-                    {m.text}
-                  </div>
-                </div>
-              );
-            })}
-
-            {displayedMessages.length <= 1 && !aiTyping && (
-              <div className="pt-1 flex flex-wrap gap-1.5">
-                {QUICK_PROMPTS.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    onClick={() => handleSendText(q)}
-                    className="text-left text-[11px] px-2.5 py-1.5 rounded-xl border border-orange-200 dark:border-orange-900/50 bg-orange-50/70 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-950/60 transition-colors cursor-pointer"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {aiTyping && (
-              <div className="flex items-center gap-2 text-xs text-slate-500 px-1">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
-                AI উত্তর লিখছে...
-              </div>
-            )}
-            <div ref={endRef} />
-          </div>
-
-          {/* Input */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void handleSendText(input);
-            }}
-            className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2 shrink-0"
-          >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={
-                session?.status === 'human_active' || session?.status === 'human_requested'
-                  ? 'Write a message to support agent...'
-                  : 'আপনার প্রশ্ন লিখুন (Bangla / English)...'
-              }
-              className="flex-1 h-10 px-3.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500/30"
-            />
-            <button
-              type="submit"
-              disabled={!input.trim() || sending}
-              aria-label="Send message"
-              className="w-10 h-10 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
-            >
-              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            </button>
-          </form>
         </div>
       )}
     </div>

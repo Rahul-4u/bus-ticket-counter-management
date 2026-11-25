@@ -51,7 +51,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const syncProfile = async (
     user: User | null,
-    options?: ProfileSyncOptions
+    options?: ProfileSyncOptions,
+    rethrowOnError = false
   ): Promise<SyncedProfile | null> => {
     if (!user) {
       setProfile(null);
@@ -80,6 +81,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return userProfile;
     } catch (err) {
       console.error('Failed to sync profile:', err);
+      if (rethrowOnError) {
+        throw err;
+      }
       return null;
     }
   };
@@ -104,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const cred = await signInWithPopup(auth, googleProvider);
       setFirebaseUser(cred.user);
-      return await syncProfile(cred.user, options);
+      return await syncProfile(cred.user, options, true);
     } finally {
       manualAuthInFlightRef.current = false;
     }
@@ -123,11 +127,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       sendEmailVerification(cred.user).catch(() => {});
       setFirebaseUser(cred.user);
-      return await syncProfile(cred.user, {
-        requestedRole: input.requestedRole,
-        phone: input.phone,
-        companyUnitName: input.companyUnitName,
-      });
+      return await syncProfile(
+        cred.user,
+        {
+          requestedRole: input.requestedRole,
+          phone: input.phone,
+          companyUnitName: input.companyUnitName,
+        },
+        true
+      );
     } finally {
       manualAuthInFlightRef.current = false;
     }
@@ -138,7 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
       setFirebaseUser(cred.user);
-      return await syncProfile(cred.user);
+      return await syncProfile(cred.user, undefined, true);
     } finally {
       manualAuthInFlightRef.current = false;
     }

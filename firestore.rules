@@ -391,9 +391,8 @@ service cloud.firestore {
         isAdmin() ||
         (resource.data.targetUid == 'staff_broadcast' && isCounterStaff())
       );
-      allow create: if isValidId(notificationId)
-        && incoming().keys().hasAll(['id', 'targetUid', 'targetRole', 'title', 'message', 'type', 'isRead', 'createdAt'])
-        && (isSignedIn() || incoming().targetUid == 'staff_broadcast');
+      allow create: if isSignedIn() && isValidId(notificationId)
+        && incoming().keys().hasAll(['id', 'targetUid', 'targetRole', 'title', 'message', 'type', 'isRead', 'createdAt']);
       allow update: if isSignedIn() && isValidId(notificationId) && (
         existing().targetUid == request.auth.uid ||
         isAdmin() ||
@@ -402,7 +401,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(notificationId);
     }
 
-    // Live AI & Human Support Chat Sessions (Visible only to passenger owner + Admin + Counter Staff)
+    // Live AI & Human Support Chat Sessions (Authenticated users only; Admin + Counter Staff see all)
     function isValidChatSession(data) {
       return data.keys().hasAll(['id', 'visitorToken', 'visitorName', 'status', 'humanRequested', 'lastMessage', 'lastSenderRole', 'unreadForStaff', 'unreadForPassenger', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['id', 'visitorToken', 'userId', 'visitorName', 'visitorEmail', 'visitorPhone', 'status', 'humanRequested', 'humanRequestedAt', 'assignedAgentUid', 'assignedAgentName', 'assignedAgentRole', 'lastMessage', 'lastSenderRole', 'unreadForStaff', 'unreadForPassenger', 'emailNotificationStatus', 'emailNotificationNote', 'createdAt', 'updatedAt'])
@@ -432,39 +431,43 @@ service cloud.firestore {
     }
 
     match /chat_sessions/{sessionId} {
-      allow get: if isValidId(sessionId) && (
+      allow get: if isSignedIn() && isValidId(sessionId) && (
         resource == null ||
         isAdmin() ||
         isCounterStaff() ||
-        (isSignedIn() && existing().userId == request.auth.uid) ||
-        existing().userId == null
+        existing().userId == request.auth.uid
       );
-      allow list: if isAdmin() || isCounterStaff()
-        || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow create: if isValidId(sessionId)
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        isCounterStaff() ||
+        resource.data.userId == request.auth.uid
+      );
+      allow create: if isSignedIn() && isValidId(sessionId)
         && isValidChatSession(incoming())
         && incoming().id == sessionId
         && incoming().status in ['ai_active', 'human_requested']
-        && (incoming().userId == null || (isSignedIn() && incoming().userId == request.auth.uid));
-      allow update: if isValidId(sessionId)
+        && incoming().userId == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(sessionId)
         && isValidChatSession(incoming())
         && incoming().id == existing().id
         && incoming().visitorToken == existing().visitorToken
         && (
           isAdmin() || isCounterStaff() || (
-            (existing().userId == null || (isSignedIn() && existing().userId == request.auth.uid))
+            existing().userId == request.auth.uid
+            && incoming().userId == existing().userId
             && incoming().assignedAgentUid == existing().assignedAgentUid
           )
         );
       allow delete: if false;
 
       match /messages/{messageId} {
-        allow get, list: if isAdmin() || isCounterStaff()
-          || (exists(/databases/$(database)/documents/chat_sessions/$(sessionId)) && (
-            (isSignedIn() && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid)
-            || (isValidId(sessionId) && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == null)
-          ));
-        allow create: if isValidId(sessionId) && isValidId(messageId)
+        allow get, list: if isSignedIn() && (
+          isAdmin() ||
+          isCounterStaff() ||
+          (exists(/databases/$(database)/documents/chat_sessions/$(sessionId))
+            && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid)
+        );
+        allow create: if isSignedIn() && isValidId(sessionId) && isValidId(messageId)
           && isValidChatMessage(incoming())
           && incoming().id == messageId
           && incoming().sessionId == sessionId
@@ -472,10 +475,7 @@ service cloud.firestore {
           && (
             isAdmin() || isCounterStaff() || (
               incoming().senderRole in ['passenger', 'ai']
-              && (
-                get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == null
-                || (isSignedIn() && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid)
-              )
+              && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid
             )
           );
         allow update, delete: if false;
