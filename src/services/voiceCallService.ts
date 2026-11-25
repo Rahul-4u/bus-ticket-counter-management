@@ -7,6 +7,7 @@ import {
   query,
   setDoc,
   updateDoc,
+  where,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -36,6 +37,8 @@ const RTC_CONFIG: RTCConfiguration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
   ],
 };
 
@@ -53,18 +56,99 @@ export interface ActiveCallController {
   endCall: () => Promise<void>;
 }
 
+/**
+ * Unlocks HTMLAudioElement playback inside a user click gesture so later
+ * asynchronous WebRTC remote audio streams play cleanly without autoplay blocks.
+ */
+export function unlockAudioElement(el: HTMLAudioElement | null): void {
+  if (!el) return;
+  try {
+    el.muted = false;
+    el.volume = 1.0;
+    const p = el.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch(() => {});
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Generates a gentle WhatsApp-style ringback / incoming chime using Web Audio API.
+ */
+export function startToneLoop(kind: 'dialing' | 'incoming'): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return () => {};
+
+  let ctx: AudioContext | null = null;
+  let timerId: number | null = null;
+  let stopped = false;
+
+  const playPulse = () => {
+    if (stopped) return;
+    try {
+      if (!ctx) ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {});
+      }
+      const now = ctx.currentTime;
+      const freqs = kind === 'incoming' ? [523.25, 659.25] : [440, 480];
+      const dur = kind === 'incoming' ? 0.35 : 0.7;
+
+      freqs.forEach((f, idx) => {
+        if (!ctx) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = f;
+        const startAt = kind === 'incoming' ? now + idx * 0.18 : now;
+        gain.gain.setValueAtTime(0.001, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.045, startAt + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startAt);
+        osc.stop(startAt + dur + 0.02);
+      });
+    } catch {
+      // Ignore Web Audio errors if blocked before gesture
+    }
+  };
+
+  playPulse();
+  timerId = window.setInterval(playPulse, kind === 'incoming' ? 2200 : 2800);
+
+  return () => {
+    stopped = true;
+    if (timerId !== null) window.clearInterval(timerId);
+    if (ctx) {
+      ctx.close().catch(() => {});
+      ctx = null;
+    }
+  };
+}
+
 async function getMicrophoneStream(): Promise<MediaStream> {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     throw new Error('আপনার ব্রাউজার লাইভ ভয়েস কল সাপোর্ট করে না। অনুগ্রহ করে সরাসরি হটলাইন নম্বরে কল করুন।');
   }
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
   } catch {
     throw new Error('মাইক্রোফোন অ্যাক্সেস পাওয়া যায়নি। ব্রাউজারে Microphone permission দিন অথবা সরাসরি হটলাইনে কল করুন।');
   }
 }
 
-function attachIceCandidateQueue(
+function attachRemoteIceQueue(
   pc: RTCPeerConnection,
   callId: string,
   subcollection: 'callerCandidates' | 'calleeCandidates'
@@ -104,11 +188,13 @@ function attachIceCandidateQueue(
   return { unsub, flush };
 }
 
-export async function startPassengerVoiceCall(params: {
+export async function startVoiceCall(params: {
   callerUid: string;
   callerName: string;
+  callerRole: 'passenger' | 'admin' | 'counter_staff';
   callerEmail?: string;
   callerPhone?: string;
+  targetUid?: string | null;
   chatSessionId?: string | null;
   onRemoteStream: (stream: MediaStream) => void;
   onStatusChange: (status: VoiceCallStatus, call: VoiceCallSession) => void;
@@ -119,6 +205,8 @@ export async function startPassengerVoiceCall(params: {
   const pc = new RTCPeerConnection(RTC_CONFIG);
   const remoteStream = new MediaStream();
   let cleanedUp = false;
+  let callDocReady = false;
+  const bufferedLocalCandidates: VoiceCallCandidate[] = [];
   let unsubCall: Unsubscribe | undefined;
   let unsubCalleeCand: Unsubscribe | undefined;
 
@@ -132,26 +220,49 @@ export async function startPassengerVoiceCall(params: {
   };
 
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
   pc.ontrack = (event) => {
-    event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
-    params.onRemoteStream(remoteStream);
+    const incomingTracks =
+      event.streams && event.streams[0]?.getTracks().length
+        ? event.streams[0].getTracks()
+        : [event.track];
+    let added = false;
+    incomingTracks.forEach((track) => {
+      if (!remoteStream.getTracks().some((t) => t.id === track.id)) {
+        remoteStream.addTrack(track);
+        added = true;
+      }
+    });
+    if (added || remoteStream.getTracks().length > 0) {
+      params.onRemoteStream(remoteStream);
+    }
+  };
+
+  const writeLocalCandidate = (cand: VoiceCallCandidate) => {
+    setDoc(doc(db, 'voice_calls', callId, 'callerCandidates', cand.id), cand).catch((err) => {
+      console.error('Failed writing caller ICE candidate:', err);
+    });
   };
 
   pc.onicecandidate = (event) => {
     if (!event.candidate) return;
-    const candId = randomId('cand');
-    const docData: VoiceCallCandidate = {
-      id: candId,
+    const candData: VoiceCallCandidate = {
+      id: randomId('cand'),
       candidate: event.candidate.candidate,
       sdpMid: event.candidate.sdpMid ?? null,
       sdpMLineIndex: event.candidate.sdpMLineIndex ?? null,
       createdAt: new Date().toISOString(),
     };
-    setDoc(doc(db, 'voice_calls', callId, 'callerCandidates', candId), docData).catch(() => {});
+    if (callDocReady) {
+      writeLocalCandidate(candData);
+    } else {
+      // Buffer until voice_calls/{callId} exists so Firestore rules never reject early ICE candidates
+      bufferedLocalCandidates.push(candData);
+    }
   };
 
   try {
-    const offer = await pc.createOffer();
+    const offer = await pc.createOffer({ offerToReceiveAudio: true });
     await pc.setLocalDescription(offer);
 
     const now = new Date().toISOString();
@@ -159,9 +270,11 @@ export async function startPassengerVoiceCall(params: {
       id: callId,
       chatSessionId: params.chatSessionId ?? null,
       callerUid: params.callerUid,
-      callerName: params.callerName.trim().slice(0, 120) || 'Passenger',
+      callerName: params.callerName.trim().slice(0, 120) || 'User',
+      callerRole: params.callerRole,
       ...(params.callerEmail ? { callerEmail: params.callerEmail.trim().slice(0, 200) } : {}),
       ...(params.callerPhone ? { callerPhone: params.callerPhone.trim().slice(0, 32) } : {}),
+      targetUid: params.targetUid ?? null,
       calleeUid: null,
       calleeName: null,
       calleeRole: null,
@@ -176,22 +289,30 @@ export async function startPassengerVoiceCall(params: {
     };
 
     await setDoc(doc(db, 'voice_calls', callId), callDoc);
+    callDocReady = true;
 
-    // Broadcast live call notification to Admin & Counter Staff
-    const notifId = randomId('notif');
-    const notif: AppNotification = {
-      id: notifId,
-      targetUid: 'staff_broadcast',
-      targetRole: 'counter_staff',
-      title: `Incoming Voice Call: ${callDoc.callerName}`,
-      message: `${callDoc.callerName} is calling live support from the website.`,
-      type: 'system',
-      isRead: false,
-      createdAt: now,
-    };
-    setDoc(doc(db, 'notifications', notifId), notif).catch(() => {});
+    // Flush any ICE candidates collected while setDoc was in flight
+    while (bufferedLocalCandidates.length > 0) {
+      const next = bufferedLocalCandidates.shift();
+      if (next) writeLocalCandidate(next);
+    }
 
-    const candQueue = attachIceCandidateQueue(pc, callId, 'calleeCandidates');
+    if (params.callerRole === 'passenger') {
+      const notifId = randomId('notif');
+      const notif: AppNotification = {
+        id: notifId,
+        targetUid: 'staff_broadcast',
+        targetRole: 'counter_staff',
+        title: `Incoming Voice Call: ${callDoc.callerName}`,
+        message: `${callDoc.callerName} is calling live support from the website.`,
+        type: 'system',
+        isRead: false,
+        createdAt: now,
+      };
+      setDoc(doc(db, 'notifications', notifId), notif).catch(() => {});
+    }
+
+    const candQueue = attachRemoteIceQueue(pc, callId, 'calleeCandidates');
     unsubCalleeCand = candQueue.unsub;
 
     unsubCall = onSnapshot(doc(db, 'voice_calls', callId), async (snap) => {
@@ -233,7 +354,7 @@ export async function answerVoiceCall(params: {
   call: VoiceCallSession;
   agentUid: string;
   agentName: string;
-  agentRole: 'admin' | 'counter_staff';
+  agentRole: 'admin' | 'counter_staff' | 'passenger';
   onRemoteStream: (stream: MediaStream) => void;
   onStatusChange: (status: VoiceCallStatus, call: VoiceCallSession) => void;
   onError: (message: string) => void;
@@ -243,6 +364,8 @@ export async function answerVoiceCall(params: {
   const pc = new RTCPeerConnection(RTC_CONFIG);
   const remoteStream = new MediaStream();
   let cleanedUp = false;
+  let answerSaved = false;
+  const bufferedLocalCandidates: VoiceCallCandidate[] = [];
   let unsubCall: Unsubscribe | undefined;
   let unsubCallerCand: Unsubscribe | undefined;
 
@@ -256,26 +379,48 @@ export async function answerVoiceCall(params: {
   };
 
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
   pc.ontrack = (event) => {
-    event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
-    params.onRemoteStream(remoteStream);
+    const incomingTracks =
+      event.streams && event.streams[0]?.getTracks().length
+        ? event.streams[0].getTracks()
+        : [event.track];
+    let added = false;
+    incomingTracks.forEach((track) => {
+      if (!remoteStream.getTracks().some((t) => t.id === track.id)) {
+        remoteStream.addTrack(track);
+        added = true;
+      }
+    });
+    if (added || remoteStream.getTracks().length > 0) {
+      params.onRemoteStream(remoteStream);
+    }
+  };
+
+  const writeCalleeCandidate = (cand: VoiceCallCandidate) => {
+    setDoc(doc(db, 'voice_calls', callId, 'calleeCandidates', cand.id), cand).catch((err) => {
+      console.error('Failed writing callee ICE candidate:', err);
+    });
   };
 
   pc.onicecandidate = (event) => {
     if (!event.candidate) return;
-    const candId = randomId('cand');
-    const docData: VoiceCallCandidate = {
-      id: candId,
+    const candData: VoiceCallCandidate = {
+      id: randomId('cand'),
       candidate: event.candidate.candidate,
       sdpMid: event.candidate.sdpMid ?? null,
       sdpMLineIndex: event.candidate.sdpMLineIndex ?? null,
       createdAt: new Date().toISOString(),
     };
-    setDoc(doc(db, 'voice_calls', callId, 'calleeCandidates', candId), docData).catch(() => {});
+    if (answerSaved) {
+      writeCalleeCandidate(candData);
+    } else {
+      bufferedLocalCandidates.push(candData);
+    }
   };
 
   try {
-    const candQueue = attachIceCandidateQueue(pc, callId, 'callerCandidates');
+    const candQueue = attachRemoteIceQueue(pc, callId, 'callerCandidates');
     unsubCallerCand = candQueue.unsub;
 
     await pc.setRemoteDescription(new RTCSessionDescription(params.call.offer as RTCSessionDescriptionInit));
@@ -295,6 +440,12 @@ export async function answerVoiceCall(params: {
       },
       updatedAt: new Date().toISOString(),
     });
+    answerSaved = true;
+
+    while (bufferedLocalCandidates.length > 0) {
+      const next = bufferedLocalCandidates.shift();
+      if (next) writeCalleeCandidate(next);
+    }
 
     unsubCall = onSnapshot(doc(db, 'voice_calls', callId), (snap) => {
       if (!snap.exists()) return;
@@ -349,6 +500,29 @@ export function subscribeStaffVoiceCalls(
     (err) => {
       console.error('Staff voice calls listener error:', err);
       onError?.(err);
+    }
+  );
+}
+
+export function subscribePassengerIncomingCalls(
+  uid: string,
+  onUpdate: (incomingCall: VoiceCallSession | null) => void
+): Unsubscribe {
+  const q = query(
+    collection(db, 'voice_calls'),
+    where('targetUid', '==', uid)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => d.data() as VoiceCallSession)
+        .filter((c) => c.status === 'ringing')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      onUpdate(list[0] || null);
+    },
+    (err) => {
+      console.error('Passenger incoming call listener error:', err);
     }
   );
 }

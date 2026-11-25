@@ -499,10 +499,10 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // In-Browser Live WebRTC Voice Calls (Signed-in caller + Admin & Counter Staff only)
+    // In-Browser Live WebRTC Voice Calls (Signed-in caller/callee + Admin & Counter Staff)
     function isValidVoiceCall(data) {
       return data.keys().hasAll(['id', 'callerUid', 'callerName', 'status', 'offer', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'chatSessionId', 'callerUid', 'callerName', 'callerEmail', 'callerPhone', 'calleeUid', 'calleeName', 'calleeRole', 'status', 'offer', 'answer', 'createdAt', 'updatedAt', 'endedAt'])
+        && data.keys().hasOnly(['id', 'chatSessionId', 'callerUid', 'callerName', 'callerRole', 'callerEmail', 'callerPhone', 'targetUid', 'calleeUid', 'calleeName', 'calleeRole', 'status', 'offer', 'answer', 'createdAt', 'updatedAt', 'endedAt'])
         && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
         && data.callerUid is string && data.callerUid.size() >= 1 && data.callerUid.size() <= 128
         && data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 120
@@ -516,12 +516,14 @@ service cloud.firestore {
         resource == null ||
         isAdmin() ||
         isCounterStaff() ||
-        existing().callerUid == request.auth.uid
+        existing().callerUid == request.auth.uid ||
+        existing().targetUid == request.auth.uid
       );
       allow list: if isSignedIn() && (
         isAdmin() ||
         isCounterStaff() ||
-        resource.data.callerUid == request.auth.uid
+        resource.data.callerUid == request.auth.uid ||
+        resource.data.targetUid == request.auth.uid
       );
       allow create: if isSignedIn() && isValidId(callId)
         && isValidVoiceCall(incoming())
@@ -535,7 +537,8 @@ service cloud.firestore {
         && (
           isAdmin() ||
           isCounterStaff() ||
-          existing().callerUid == request.auth.uid
+          existing().callerUid == request.auth.uid ||
+          existing().targetUid == request.auth.uid
         );
       allow delete: if false;
 
@@ -545,8 +548,10 @@ service cloud.firestore {
           && (
             isAdmin() ||
             isCounterStaff() ||
-            (exists(/databases/$(database)/documents/voice_calls/$(callId))
-              && get(/databases/$(database)/documents/voice_calls/$(callId)).data.callerUid == request.auth.uid)
+            (exists(/databases/$(database)/documents/voice_calls/$(callId)) && (
+              get(/databases/$(database)/documents/voice_calls/$(callId)).data.callerUid == request.auth.uid ||
+              get(/databases/$(database)/documents/voice_calls/$(callId)).data.targetUid == request.auth.uid
+            ))
           );
         allow create: if isSignedIn()
           && candCollection in ['callerCandidates', 'calleeCandidates']
@@ -555,7 +560,8 @@ service cloud.firestore {
           && (
             isAdmin() ||
             isCounterStaff() ||
-            get(/databases/$(database)/documents/voice_calls/$(callId)).data.callerUid == request.auth.uid
+            get(/databases/$(database)/documents/voice_calls/$(callId)).data.callerUid == request.auth.uid ||
+            get(/databases/$(database)/documents/voice_calls/$(callId)).data.targetUid == request.auth.uid
           );
         allow update, delete: if false;
       }

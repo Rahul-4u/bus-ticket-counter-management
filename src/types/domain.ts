@@ -385,11 +385,13 @@ export interface VoiceCallSession {
   chatSessionId?: string | null;
   callerUid: string;
   callerName: string;
+  callerRole?: 'passenger' | 'admin' | 'counter_staff';
   callerEmail?: string;
   callerPhone?: string;
+  targetUid?: string | null;
   calleeUid?: string | null;
   calleeName?: string | null;
-  calleeRole?: 'admin' | 'counter_staff' | null;
+  calleeRole?: 'admin' | 'counter_staff' | 'passenger' | null;
   status: VoiceCallStatus;
   offer: VoiceCallOfferAnswer;
   answer?: VoiceCallOfferAnswer | null;

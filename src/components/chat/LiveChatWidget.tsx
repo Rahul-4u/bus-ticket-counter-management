@@ -11,6 +11,8 @@ import {
   Mic,
   MicOff,
   PhoneCall,
+  PhoneIncoming,
+  PhoneMissed,
   PhoneOff,
   Plus,
   Send,
@@ -18,6 +20,7 @@ import {
   Sparkles,
   UserCheck,
   UserPlus,
+  Volume2,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -36,12 +39,17 @@ import {
   updateChatSessionMeta,
 } from '../../services/chatService';
 import {
+  answerVoiceCall,
   DEFAULT_SUPPORT_PHONE,
-  startPassengerVoiceCall,
+  startToneLoop,
+  startVoiceCall,
+  subscribePassengerIncomingCalls,
   toTelHref,
+  unlockAudioElement,
+  updateVoiceCallStatus,
   type ActiveCallController,
 } from '../../services/voiceCallService';
-import type { ChatMessage, ChatSession, VoiceCallStatus } from '../../types/domain';
+import type { ChatMessage, ChatSession, VoiceCallSession, VoiceCallStatus } from '../../types/domain';
 
 const QUICK_PROMPTS = [
   'ঢাকা থেকে কক্সবাজার বাস ও ভাড়া কত?',
@@ -88,15 +96,39 @@ export function LiveChatWidget() {
   const [sessionId, setSessionId] = useState<string>('');
   const [visitorToken, setVisitorToken] = useState<string>('');
 
-  // In-browser WebRTC live voice call state
+  // WhatsApp-style in-browser WebRTC live voice call state
   const [callStatus, setCallStatus] = useState<VoiceCallStatus | null>(null);
-  const [callAgentName, setCallAgentName] = useState<string>('');
+  const [incomingCall, setIncomingCall] = useState<VoiceCallSession | null>(null);
+  const [callPeerName, setCallPeerName] = useState<string>('DeshLine Support');
   const [callMuted, setCallMuted] = useState(false);
   const [callSeconds, setCallSeconds] = useState(0);
   const [callError, setCallError] = useState('');
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+
   const callControllerRef = useRef<ActiveCallController | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+
+  // Bind remoteStream cleanly to persistent <audio> element
+  useEffect(() => {
+    const audioEl = remoteAudioRef.current;
+    if (!audioEl) return;
+    if (!remoteStream) {
+      audioEl.srcObject = null;
+      setAudioBlocked(false);
+      return;
+    }
+    audioEl.srcObject = remoteStream;
+    audioEl.muted = false;
+    audioEl.volume = 1.0;
+    const playPromise = audioEl.play();
+    if (playPromise && typeof playPromise.then === 'function') {
+      playPromise
+        .then(() => setAudioBlocked(false))
+        .catch(() => setAudioBlocked(true));
+    }
+  }, [remoteStream]);
 
   // Reset state whenever user logs out
   useEffect(() => {
@@ -104,6 +136,8 @@ export function LiveChatWidget() {
       void callControllerRef.current?.endCall();
       callControllerRef.current = null;
       setCallStatus(null);
+      setIncomingCall(null);
+      setRemoteStream(null);
       setSession(null);
       setMessages([]);
       setLocalFallbackMsgs([]);
@@ -132,6 +166,47 @@ export function LiveChatWidget() {
       active = false;
     };
   }, [profile?.uid]);
+
+  // Listen for incoming calls initiated by Admin / Counter Staff to this passenger
+  useEffect(() => {
+    if (!profile?.uid) return;
+    const unsub = subscribePassengerIncomingCalls(profile.uid, (call) => {
+      if (call && callControllerRef.current === null) {
+        setIncomingCall(call);
+        setCallPeerName(call.callerName || 'DeshLine Support');
+        setOpen(true);
+      } else if (!call) {
+        setIncomingCall(null);
+      }
+    });
+    return () => unsub();
+  }, [profile?.uid]);
+
+  // WhatsApp-style ringback / incoming ringtone while ringing
+  useEffect(() => {
+    if (callStatus === 'ringing') {
+      return startToneLoop('dialing');
+    }
+    if (incomingCall && callStatus !== 'active') {
+      return startToneLoop('incoming');
+    }
+  }, [callStatus, incomingCall?.id]);
+
+  // Auto-mark outgoing call as missed after 45 seconds if unanswered
+  useEffect(() => {
+    if (callStatus !== 'ringing') return;
+    const timeoutId = window.setTimeout(() => {
+      const activeId = callControllerRef.current?.callId;
+      if (activeId) {
+        void updateVoiceCallStatus(activeId, 'missed').catch(() => {});
+      }
+      void callControllerRef.current?.endCall();
+      callControllerRef.current = null;
+      setRemoteStream(null);
+      setCallStatus('missed');
+    }, 45_000);
+    return () => window.clearTimeout(timeoutId);
+  }, [callStatus]);
 
   // Call duration timer
   useEffect(() => {
@@ -239,15 +314,21 @@ export function LiveChatWidget() {
         dot: 'bg-amber-400',
       };
     }
+    if (incomingCall && callStatus !== 'active') {
+      return {
+        label: `Incoming Call from ${incomingCall.callerName}...`,
+        dot: 'bg-emerald-400 animate-ping',
+      };
+    }
     if (callStatus === 'active') {
       return {
-        label: `On Voice Call · ${callAgentName || 'Support'} (${formatDuration(callSeconds)})`,
+        label: `Voice Call · ${callPeerName} (${formatDuration(callSeconds)})`,
         dot: 'bg-emerald-400 animate-pulse',
       };
     }
     if (callStatus === 'ringing') {
       return {
-        label: 'Calling Admin / Bus Counter...',
+        label: 'Ringing DeshLine Counter / Admin...',
         dot: 'bg-amber-400 animate-pulse',
       };
     }
@@ -273,49 +354,108 @@ export function LiveChatWidget() {
           dot: 'bg-emerald-400',
         };
     }
-  }, [profile, callStatus, callAgentName, callSeconds, session?.status, session?.assignedAgentName]);
+  }, [profile, incomingCall, callStatus, callPeerName, callSeconds, session?.status, session?.assignedAgentName]);
 
   const handleStartLiveVoiceCall = async () => {
     if (!profile || callStatus === 'ringing' || callStatus === 'active') return;
+    unlockAudioElement(remoteAudioRef.current);
     setCallError('');
     setCallMuted(false);
+    setRemoteStream(null);
     setCallStatus('ringing');
-    setCallAgentName('');
+    setCallPeerName('DeshLine Support');
 
     try {
-      const controller = await startPassengerVoiceCall({
+      const controller = await startVoiceCall({
         callerUid: profile.uid,
         callerName: profile.displayName || profile.email.split('@')[0] || 'Passenger',
+        callerRole: 'passenger',
         callerEmail: profile.email || undefined,
         callerPhone: profile.phone || undefined,
         chatSessionId: session?.id ?? null,
         onRemoteStream: (stream) => {
-          if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = stream;
-            void remoteAudioRef.current.play().catch(() => {});
-          }
+          setRemoteStream(new MediaStream(stream.getTracks()));
         },
         onStatusChange: (status, call) => {
           setCallStatus(status);
-          if (call.calleeName) setCallAgentName(call.calleeName);
+          if (call.calleeName) setCallPeerName(call.calleeName);
           if (status === 'declined') {
-            setCallError('এই মুহূর্তে কোনো এজেন্ট কল রিসিভ করতে পারেননি। সরাসরি হটলাইন নম্বরে কল করতে পারেন।');
+            setCallError('এজেন্ট কলটি রিসিভ করতে পারেননি। অনুগ্রহ করে আবার চেষ্টা করুন বা হটলাইনে কল করুন।');
+            setRemoteStream(null);
             callControllerRef.current = null;
           } else if (status === 'ended' || status === 'missed') {
+            setRemoteStream(null);
             callControllerRef.current = null;
+            if (status === 'ended') {
+              setCallStatus(null);
+            }
           }
         },
         onError: (msg) => {
           setCallError(msg);
           setCallStatus(null);
+          setRemoteStream(null);
           callControllerRef.current = null;
         },
       });
       callControllerRef.current = controller;
     } catch (err) {
       setCallStatus(null);
+      setRemoteStream(null);
       setCallError(err instanceof Error ? err.message : 'কল শুরু করা যায়নি।');
     }
+  };
+
+  const handleAnswerIncomingCall = async () => {
+    if (!profile || !incomingCall) return;
+    unlockAudioElement(remoteAudioRef.current);
+    setCallError('');
+    setCallMuted(false);
+    const targetCall = incomingCall;
+    setIncomingCall(null);
+    setCallPeerName(targetCall.callerName || 'DeshLine Support');
+    setCallStatus('active');
+
+    try {
+      const controller = await answerVoiceCall({
+        call: targetCall,
+        agentUid: profile.uid,
+        agentName: profile.displayName || 'Passenger',
+        agentRole: 'passenger',
+        onRemoteStream: (stream) => {
+          setRemoteStream(new MediaStream(stream.getTracks()));
+        },
+        onStatusChange: (status) => {
+          if (status === 'ended' || status === 'declined' || status === 'missed') {
+            setCallStatus(null);
+            setRemoteStream(null);
+            callControllerRef.current = null;
+          }
+        },
+        onError: (msg) => {
+          setCallError(msg);
+          setCallStatus(null);
+          setRemoteStream(null);
+          callControllerRef.current = null;
+        },
+      });
+      callControllerRef.current = controller;
+    } catch (err) {
+      setCallStatus(null);
+      setCallError(err instanceof Error ? err.message : 'কল রিসিভ করা যায়নি।');
+    }
+  };
+
+  const handleDeclineIncomingCall = async () => {
+    if (!incomingCall) return;
+    const id = incomingCall.id;
+    setIncomingCall(null);
+    await updateVoiceCallStatus(id, 'declined').catch(() => {});
+  };
+
+  const handleEnableBlockedAudio = () => {
+    unlockAudioElement(remoteAudioRef.current);
+    setAudioBlocked(false);
   };
 
   const handleToggleMute = () => {
@@ -327,6 +467,7 @@ export function LiveChatWidget() {
   const handleEndVoiceCall = async () => {
     await callControllerRef.current?.endCall();
     callControllerRef.current = null;
+    setRemoteStream(null);
     setCallStatus(null);
     setCallMuted(false);
   };
@@ -531,14 +672,25 @@ export function LiveChatWidget() {
     setVisitorToken(fresh.visitorToken);
   };
 
+  const showWhatsAppCallOverlay =
+    Boolean(profile) &&
+    (Boolean(incomingCall) ||
+      callStatus === 'ringing' ||
+      callStatus === 'active' ||
+      callStatus === 'missed');
+
   return (
     <div className="fixed bottom-5 right-5 z-50 no-print">
+      {/* Persistent audio element (never conditionally unmounted) */}
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
       {!open ? (
         <button
           type="button"
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            unlockAudioElement(remoteAudioRef.current);
+            setOpen(true);
+          }}
           className="group relative flex items-center gap-2.5 px-4 py-3.5 rounded-full bg-[#0B1F3A] hover:bg-orange-600 text-white shadow-2xl border border-white/15 transition-all cursor-pointer"
           aria-label="Open Live AI Support Chat"
         >
@@ -558,12 +710,12 @@ export function LiveChatWidget() {
           )}
         </button>
       ) : (
-        <div className="w-[calc(100vw-2rem)] sm:w-[395px] h-[560px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+        <div className="relative w-[calc(100vw-2rem)] sm:w-[395px] h-[560px] max-h-[82vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
           {/* Header */}
           <div className="bg-[#0B1F3A] text-white px-4 py-3.5 flex items-center justify-between gap-2 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-9 h-9 rounded-xl bg-orange-600 flex items-center justify-center shrink-0">
-                {callStatus === 'ringing' || callStatus === 'active' ? (
+                {callStatus === 'ringing' || callStatus === 'active' || incomingCall ? (
                   <PhoneCall className="w-4 h-4 animate-pulse" />
                 ) : session?.status === 'human_active' || session?.status === 'human_requested' ? (
                   <Headset className="w-4 h-4" />
@@ -654,6 +806,151 @@ export function LiveChatWidget() {
                 </a>
               </div>
             </div>
+          ) : showWhatsAppCallOverlay ? (
+            /* WhatsApp-style Full Voice Call Screen */
+            <div className="flex-1 bg-gradient-to-b from-[#0B1F3A] via-[#0F2C4C] to-[#071527] text-white p-6 flex flex-col items-center justify-between text-center">
+              <div className="space-y-1">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 text-[11px] font-semibold text-emerald-300">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  DeshLine Encrypted Voice Call
+                </span>
+              </div>
+
+              <div className="space-y-4 flex flex-col items-center">
+                <div className="relative flex items-center justify-center">
+                  {(callStatus === 'ringing' || incomingCall) && (
+                    <span className="absolute w-28 h-28 rounded-full bg-emerald-500/20 animate-ping" />
+                  )}
+                  <div className="relative w-24 h-24 rounded-full bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-3xl font-extrabold shadow-xl border-2 border-white/20">
+                    {incomingCall ? (
+                      <PhoneIncoming className="w-10 h-10 animate-bounce" />
+                    ) : callStatus === 'missed' ? (
+                      <PhoneMissed className="w-10 h-10 text-amber-300" />
+                    ) : (
+                      (callPeerName[0] || 'D').toUpperCase()
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-extrabold font-display">{callPeerName}</h3>
+                  <p className="text-xs text-emerald-300 font-mono mt-1">
+                    {incomingCall
+                      ? 'Incoming Voice Call...'
+                      : callStatus === 'ringing'
+                        ? 'Ringing... Waiting for Admin / Counter'
+                        : callStatus === 'active'
+                          ? `Connected · ${formatDuration(callSeconds)}`
+                          : 'No Answer (Missed)'}
+                  </p>
+                </div>
+
+                {audioBlocked && (
+                  <button
+                    type="button"
+                    onClick={handleEnableBlockedAudio}
+                    className="px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 shadow-lg animate-pulse cursor-pointer"
+                  >
+                    <Volume2 className="w-4 h-4" />
+                    Tap to Hear Audio
+                  </button>
+                )}
+              </div>
+
+              {incomingCall ? (
+                <div className="w-full flex items-center justify-center gap-8 pb-2">
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleDeclineIncomingCall}
+                      className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg cursor-pointer"
+                      aria-label="Decline call"
+                    >
+                      <PhoneOff className="w-6 h-6" />
+                    </button>
+                    <span className="text-[11px] text-slate-300">Decline</span>
+                  </div>
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleAnswerIncomingCall}
+                      className="w-14 h-14 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-lg cursor-pointer"
+                      aria-label="Answer call"
+                    >
+                      <PhoneCall className="w-6 h-6" />
+                    </button>
+                    <span className="text-[11px] text-emerald-300 font-semibold">Accept</span>
+                  </div>
+                </div>
+              ) : callStatus === 'missed' ? (
+                <div className="w-full space-y-2.5 pb-2">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleStartLiveVoiceCall}
+                      className="flex-1 h-10 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <PhoneCall className="w-4 h-4" />
+                      Call Again
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCallStatus(null)}
+                      className="flex-1 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      Back to Chat
+                    </button>
+                  </div>
+                  <a
+                    href={toTelHref(supportPhone)}
+                    className="w-full h-9 rounded-xl border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-white/5"
+                  >
+                    <PhoneCall className="w-3.5 h-3.5" />
+                    Call Phone Hotline ({supportPhone})
+                  </a>
+                </div>
+              ) : (
+                <div className="w-full flex items-center justify-center gap-6 pb-2">
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleToggleMute}
+                      className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+                        callMuted ? 'bg-amber-500 text-slate-950' : 'bg-white/15 hover:bg-white/25 text-white'
+                      }`}
+                      aria-label={callMuted ? 'Unmute mic' : 'Mute mic'}
+                    >
+                      {callMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                    </button>
+                    <span className="text-[11px] text-slate-300">{callMuted ? 'Unmute' : 'Mute'}</span>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleEndVoiceCall}
+                      className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center shadow-lg cursor-pointer"
+                      aria-label="End call"
+                    >
+                      <PhoneOff className="w-6 h-6" />
+                    </button>
+                    <span className="text-[11px] text-red-300 font-semibold">End</span>
+                  </div>
+
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleEnableBlockedAudio}
+                      className="w-12 h-12 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors cursor-pointer"
+                      aria-label="Test speaker"
+                    >
+                      <Volume2 className="w-5 h-5" />
+                    </button>
+                    <span className="text-[11px] text-slate-300">Speaker</span>
+                  </div>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               {/* Human & Voice Call Action Bar */}
@@ -676,17 +973,15 @@ export function LiveChatWidget() {
                 )}
 
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {callStatus !== 'ringing' && callStatus !== 'active' && (
-                    <button
-                      type="button"
-                      onClick={handleStartLiveVoiceCall}
-                      title="Start live browser voice call to Admin/Counter"
-                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
-                    >
-                      <PhoneCall className="w-3 h-3" />
-                      Voice Call
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={handleStartLiveVoiceCall}
+                    title="Start live WhatsApp-style browser voice call"
+                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <PhoneCall className="w-3 h-3" />
+                    Voice Call
+                  </button>
                   {session?.status !== 'human_requested' && session?.status !== 'human_active' && (
                     <button
                       type="button"
@@ -700,42 +995,6 @@ export function LiveChatWidget() {
                   )}
                 </div>
               </div>
-
-              {/* Active Voice Call Controls Banner */}
-              {(callStatus === 'ringing' || callStatus === 'active') && (
-                <div className="px-3.5 py-2.5 bg-emerald-950 text-white flex items-center justify-between gap-2 shrink-0">
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                      {callStatus === 'ringing'
-                        ? 'কল রিং হচ্ছে (Admin / Counter)...'
-                        : `লাইভ ভয়েস কল · ${formatDuration(callSeconds)}`}
-                    </p>
-                    {callAgentName && (
-                      <p className="text-[10px] text-emerald-300 truncate">Connected with {callAgentName}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={handleToggleMute}
-                      title={callMuted ? 'Unmute' : 'Mute'}
-                      className="p-2 rounded-lg bg-white/15 hover:bg-white/25 cursor-pointer"
-                    >
-                      {callMuted ? <MicOff className="w-3.5 h-3.5 text-amber-300" /> : <Mic className="w-3.5 h-3.5" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleEndVoiceCall}
-                      title="End Call"
-                      className="px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
-                    >
-                      <PhoneOff className="w-3.5 h-3.5" />
-                      End
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {callError && (
                 <div className="px-3.5 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-200 dark:border-red-900 text-[11px] text-red-700 dark:text-red-300 flex items-center justify-between gap-2 shrink-0">

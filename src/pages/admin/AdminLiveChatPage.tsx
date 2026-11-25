@@ -7,6 +7,7 @@ import {
   MailCheck,
   MessageSquareText,
   Phone,
+  PhoneCall,
   Search,
   Send,
   Sparkles,
@@ -15,6 +16,8 @@ import {
 import { AdminShell } from './AdminShell';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../components/Toast';
+import { triggerStaffVoiceCallToPassenger } from '../../components/chat/StaffVoiceCallBanner';
+import { toTelHref } from '../../services/voiceCallService';
 import {
   sendChatMessage,
   subscribeChatMessages,
@@ -339,6 +342,33 @@ export function AdminLiveChatPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {selectedSession.userId && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          triggerStaffVoiceCallToPassenger({
+                            targetUid: selectedSession.userId!,
+                            passengerName: selectedSession.visitorName,
+                            passengerPhone: selectedSession.visitorPhone,
+                            passengerEmail: selectedSession.visitorEmail,
+                            chatSessionId: selectedSession.id,
+                          })
+                        }
+                        className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <PhoneCall className="w-3.5 h-3.5" />
+                        Voice Call
+                      </button>
+                    )}
+                    {selectedSession.visitorPhone && (
+                      <a
+                        href={toTelHref(selectedSession.visitorPhone)}
+                        className="px-3 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold inline-flex items-center gap-1.5"
+                      >
+                        <Phone className="w-3.5 h-3.5" />
+                        Dial Phone
+                      </a>
+                    )}
                     {selectedSession.status !== 'human_active' && (
                       <button
                         type="button"
