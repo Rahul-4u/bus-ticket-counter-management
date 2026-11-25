@@ -11,8 +11,6 @@ import {
   toTelHref,
   toWhatsAppHref,
 } from '../../services/voiceCallService';
-import { LiveChatWidget } from '../chat/LiveChatWidget';
-import { StaffVoiceCallBanner } from '../chat/StaffVoiceCallBanner';
 
 export function PublicLayout({ children }: { children: React.ReactNode }) {
   const { profile, logout } = useAuth();
@@ -301,8 +299,6 @@ export function PublicLayout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </footer>
-      <LiveChatWidget />
-      <StaffVoiceCallBanner />
     </div>
   );
 }

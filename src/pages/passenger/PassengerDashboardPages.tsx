@@ -14,7 +14,6 @@ import {
   Users,
 } from 'lucide-react';
 import { DashboardLayout, SidebarGroup } from '../../components/dashboard/DashboardLayout';
-import { LiveChatWidget } from '../../components/chat/LiveChatWidget';
 import { StatCard } from '../../components/dashboard/StatCard';
 import { DataTable } from '../../components/dashboard/DataTable';
 import { FormDialog } from '../../components/dashboard/Dialogs';
@@ -64,7 +63,6 @@ export function PassengerShell({ children }: { children: React.ReactNode }) {
   return (
     <DashboardLayout portalTitle="Passenger Portal" roleLabel="Passenger" groups={PASSENGER_GROUPS}>
       {children}
-      <LiveChatWidget />
     </DashboardLayout>
   );
 }

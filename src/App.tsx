@@ -35,6 +35,8 @@ import {
   AdminUsersPage,
 } from './pages/admin/AdminSystemMarketingPages';
 import { AdminLiveChatPage } from './pages/admin/AdminLiveChatPage';
+import { LiveChatWidget } from './components/chat/LiveChatWidget';
+import { StaffVoiceCallBanner } from './components/chat/StaffVoiceCallBanner';
 
 import {
   OwnerBookingsPage,
@@ -153,6 +155,8 @@ export default function App() {
 
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
+                <LiveChatWidget />
+                <StaffVoiceCallBanner />
               </BrowserRouter>
             </ToastProvider>
           </AuthProvider>

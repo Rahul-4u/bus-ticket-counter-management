@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Mic, MicOff, PhoneCall, PhoneIncoming, PhoneOff, Volume2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../Toast';
@@ -261,14 +262,14 @@ export function StaffVoiceCallBanner() {
     setMuted(false);
   };
 
-  return (
+  const content = (
     <>
       {/* Persistent audio element always mounted */}
       <audio ref={audioRef} autoPlay playsInline className="hidden" />
 
       {/* Unmissable Full-Screen WhatsApp-Style Incoming Call Modal when Ringing */}
       {!activeCall && !outgoingCall && ringingCall && (
-        <div className="fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 no-print">
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 no-print">
           <div className="w-full max-w-sm bg-gradient-to-b from-[#0B1F3A] via-[#0F2C4C] to-[#071527] text-white rounded-3xl border border-emerald-500/50 shadow-2xl p-7 text-center space-y-6">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-semibold">
               <PhoneIncoming className="w-3.5 h-3.5 animate-bounce" />
@@ -328,7 +329,7 @@ export function StaffVoiceCallBanner() {
 
       {/* Active / Outgoing Call Floating Card */}
       {(activeCall || outgoingCall) && (
-        <div className="fixed bottom-5 right-5 z-[95] w-[345px] max-w-[calc(100vw-2rem)] no-print">
+        <div className="fixed bottom-5 right-5 z-[99995] w-[345px] max-w-[calc(100vw-2rem)] no-print">
           {activeCall ? (
             <div className="bg-gradient-to-b from-[#0B1F3A] to-[#071527] text-white border border-emerald-500/50 rounded-2xl shadow-2xl p-4 space-y-3">
               <div className="flex items-center gap-3 min-w-0">
@@ -421,4 +422,6 @@ export function StaffVoiceCallBanner() {
       )}
     </>
   );
+
+  return typeof document !== 'undefined' ? createPortal(content, document.body) : content;
 }

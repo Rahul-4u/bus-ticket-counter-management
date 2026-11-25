@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { createPortal } from 'react-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Bot,
@@ -82,6 +83,9 @@ function formatDuration(sec: number): string {
 export function LiveChatWidget() {
   const { profile, loading: authLoading, refreshProfile } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isStaffPortalRoute =
+    location.pathname.startsWith('/admin') || location.pathname.startsWith('/owner');
 
   const { data: settings } = useQuery({
     queryKey: ['company-settings'],
@@ -747,14 +751,18 @@ export function LiveChatWidget() {
     }`
   );
 
-  return (
+  if (isStaffPortalRoute && !incomingCall && callStatus !== 'active' && callStatus !== 'ringing') {
+    return <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />;
+  }
+
+  const content = (
     <>
       {/* Persistent audio element (never conditionally unmounted) */}
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
       {/* Unmissable Full-Screen WhatsApp-Style Incoming Call Popup for Passenger */}
       {profile && incomingCall && callStatus !== 'active' && (
-        <div className="fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 no-print">
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 no-print">
           <div className="w-full max-w-sm bg-gradient-to-b from-[#0B1F3A] via-[#0F2C4C] to-[#071527] text-white rounded-3xl border border-emerald-500/50 shadow-2xl p-7 text-center space-y-6">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-semibold">
               <PhoneIncoming className="w-3.5 h-3.5 animate-bounce" />
@@ -802,7 +810,7 @@ export function LiveChatWidget() {
         </div>
       )}
 
-      <div className="fixed bottom-5 right-5 z-50 no-print">
+      <div className="fixed bottom-5 right-5 z-[99990] no-print">
         {!open ? (
           <button
             type="button"
@@ -1318,4 +1326,6 @@ export function LiveChatWidget() {
       </div>
     </>
   );
+
+  return typeof document !== 'undefined' ? createPortal(content, document.body) : content;
 }
