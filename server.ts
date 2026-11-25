@@ -10,7 +10,7 @@ import {
   generateAiSupportReply,
   sendHumanSupportEmailNotification,
   type ChatHistoryTurn,
-} from './api/_lib/chatBackend';
+} from './api/_lib/chatBackend.js';
 
 dotenv.config();
 

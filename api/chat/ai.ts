@@ -1,4 +1,4 @@
-import { generateAiSupportReply, type ChatHistoryTurn } from '../_lib/chatBackend';
+import { generateAiSupportReply, type ChatHistoryTurn } from '../_lib/chatBackend.js';
 import type { VercelRequest, VercelResponse } from '../_lib/paymentAuth';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
