@@ -50,6 +50,9 @@ export function LiveChatWidget() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [chatError, setChatError] = useState('');
+  const [localFallbackMsgs, setLocalFallbackMsgs] = useState<ChatMessage[]>([]);
   const [aiTyping, setAiTyping] = useState(false);
   const [showContactForm, setShowContactForm] = useState(false);
   const [guestName, setGuestName] = useState('');
@@ -110,6 +113,8 @@ export function LiveChatWidget() {
     let cancelled = false;
 
     async function connect() {
+      setConnecting(true);
+      setChatError('');
       const initialName = profile?.displayName || guestName.trim() || 'Passenger Guest';
       const ensured = await ensureChatSession({
         sessionId,
@@ -121,6 +126,7 @@ export function LiveChatWidget() {
       });
       if (cancelled) return;
       setSession(ensured);
+      setConnecting(false);
 
       unsubSession = subscribeChatSession(sessionId, (next) => {
         if (next) setSession(next);
@@ -132,6 +138,10 @@ export function LiveChatWidget() {
 
     connect().catch((err) => {
       console.error('Failed to connect live chat:', err);
+      if (!cancelled) {
+        setConnecting(false);
+        setChatError('লাইভ চ্যাট ডাটাবেজ সংযোগে সমস্যা হয়েছে, তবে AI উত্তর দিতে প্রস্তুত।');
+      }
     });
 
     return () => {
@@ -246,6 +256,18 @@ export function LiveChatWidget() {
 
     setSending(true);
     setInput('');
+    setChatError('');
+
+    const passengerName = profile?.displayName || guestName.trim() || session?.visitorName || 'Passenger Guest';
+    const optimisticUserMsg: ChatMessage = {
+      id: `local_${Date.now()}_u`,
+      sessionId,
+      senderRole: 'passenger',
+      senderName: passengerName,
+      senderUid: profile?.uid ?? null,
+      text,
+      createdAt: new Date().toISOString(),
+    };
 
     try {
       const activeSession =
@@ -254,12 +276,12 @@ export function LiveChatWidget() {
           sessionId,
           visitorToken,
           userId: profile?.uid ?? null,
-          visitorName: profile?.displayName || guestName.trim() || 'Passenger Guest',
+          visitorName: passengerName,
           visitorEmail: profile?.email || guestEmail.trim() || undefined,
           visitorPhone: profile?.phone || guestPhone.trim() || undefined,
         }));
+      if (!session) setSession(activeSession);
 
-      const passengerName = profile?.displayName || guestName.trim() || activeSession.visitorName || 'Passenger Guest';
       const nextStatus = activeSession.status === 'resolved' ? 'ai_active' : activeSession.status;
 
       await sendChatMessage({
@@ -311,14 +333,33 @@ export function LiveChatWidget() {
       }
     } catch (err) {
       console.error('Chat send error:', err);
-      if (session) {
-        await sendChatMessage({
-          session,
-          senderRole: 'ai',
-          senderName: 'DeshLine AI Assistant',
-          senderUid: null,
-          text: 'দুঃখিত, এই মুহূর্তে AI সার্ভারে সাময়িক সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন অথবা "Talk to Human" বাটনে ক্লিক করে সরাসরি কাউন্টার/অ্যাডমিনের সাথে কথা বলুন।',
-        }).catch(() => {});
+      // Fallback: show passenger message & AI reply locally so chat never appears blank
+      setLocalFallbackMsgs((prev) => [...prev, optimisticUserMsg]);
+      try {
+        setAiTyping(true);
+        const aiRes = await requestAiChatReply({
+          message: text,
+          history: [...messages, ...localFallbackMsgs].slice(-8).map((m) => ({
+            senderRole: m.senderRole,
+            text: m.text,
+          })),
+          visitorName: passengerName,
+          routeSummary,
+        });
+        setLocalFallbackMsgs((prev) => [
+          ...prev,
+          {
+            id: `local_${Date.now()}_a`,
+            sessionId,
+            senderRole: 'ai',
+            senderName: 'DeshLine AI Assistant',
+            senderUid: null,
+            text: aiRes.reply,
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      } catch {
+        setChatError('মেসেজ পাঠাতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।');
       }
     } finally {
       setAiTyping(false);
@@ -378,9 +419,13 @@ export function LiveChatWidget() {
     }
   };
 
+  const displayedMessages = messages.length > 0 ? messages : localFallbackMsgs;
+
   const handleStartNewChat = async () => {
     const fresh = resetLocalChatIdentity(profile?.uid);
     setMessages([]);
+    setLocalFallbackMsgs([]);
+    setChatError('');
     setSession(null);
     setSessionId(fresh.sessionId);
     setVisitorToken(fresh.visitorToken);
@@ -534,7 +579,20 @@ export function LiveChatWidget() {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-50/60 dark:bg-slate-950/40">
-            {messages.map((m) => {
+            {connecting && displayedMessages.length === 0 && (
+              <div className="flex items-center gap-2 text-xs text-slate-500 px-1 py-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
+                চ্যাট সংযুক্ত হচ্ছে...
+              </div>
+            )}
+
+            {chatError && (
+              <div className="text-[11px] px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-200">
+                {chatError}
+              </div>
+            )}
+
+            {displayedMessages.map((m) => {
               const isPassenger = m.senderRole === 'passenger';
               const isStaff = m.senderRole === 'admin' || m.senderRole === 'counter_staff';
               return (
@@ -566,7 +624,7 @@ export function LiveChatWidget() {
               );
             })}
 
-            {messages.length <= 1 && !aiTyping && (
+            {displayedMessages.length <= 1 && !aiTyping && (
               <div className="pt-1 flex flex-wrap gap-1.5">
                 {QUICK_PROMPTS.map((q) => (
                   <button

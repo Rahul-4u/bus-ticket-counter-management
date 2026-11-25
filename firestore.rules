@@ -432,9 +432,13 @@ service cloud.firestore {
     }
 
     match /chat_sessions/{sessionId} {
-      allow get: if isAdmin() || isCounterStaff()
-        || (isSignedIn() && existing().userId == request.auth.uid)
-        || (isValidId(sessionId) && existing().userId == null);
+      allow get: if isValidId(sessionId) && (
+        resource == null ||
+        isAdmin() ||
+        isCounterStaff() ||
+        (isSignedIn() && existing().userId == request.auth.uid) ||
+        existing().userId == null
+      );
       allow list: if isAdmin() || isCounterStaff()
         || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow create: if isValidId(sessionId)
@@ -456,12 +460,15 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow get, list: if isAdmin() || isCounterStaff()
-          || (isSignedIn() && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid)
-          || (isValidId(sessionId) && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == null);
+          || (exists(/databases/$(database)/documents/chat_sessions/$(sessionId)) && (
+            (isSignedIn() && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == request.auth.uid)
+            || (isValidId(sessionId) && get(/databases/$(database)/documents/chat_sessions/$(sessionId)).data.userId == null)
+          ));
         allow create: if isValidId(sessionId) && isValidId(messageId)
           && isValidChatMessage(incoming())
           && incoming().id == messageId
           && incoming().sessionId == sessionId
+          && exists(/databases/$(database)/documents/chat_sessions/$(sessionId))
           && (
             isAdmin() || isCounterStaff() || (
               incoming().senderRole in ['passenger', 'ai']
